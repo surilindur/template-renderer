@@ -1,15 +1,15 @@
-import type * as RDF from '@rdfjs/types';
-import MurmurHash3 from 'imurmurhash';
-import { DataFactory } from 'rdf-data-factory';
-import type { IQueryEngine, QuerySourceUnidentified } from '@comunica/types';
-import type { Algebra, AlgebraFactory } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { Generator } from '@traqula/generator-sparql-1-2';
-import { Parser } from '@traqula/parser-sparql-1-2';
-import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
-import { Eta } from 'eta';
-import { TermTemplate } from './TermTemplate';
-import type { ITermTemplateContext } from './TermTemplateContext';
+import type * as RDF from "@rdfjs/types";
+import MurmurHash3 from "imurmurhash";
+import { DataFactory } from "rdf-data-factory";
+import type { IQueryEngine, QuerySourceUnidentified } from "@comunica/types";
+import type { Algebra, AlgebraFactory } from "@traqula/algebra-transformations-1-2";
+import { algebraUtils } from "@traqula/algebra-transformations-1-2";
+import { Generator } from "@traqula/generator-sparql-1-2";
+import { Parser } from "@traqula/parser-sparql-1-2";
+import { toAlgebra, toAst } from "@traqula/algebra-sparql-1-2";
+import { Eta } from "eta";
+import { TermTemplate } from "./TermTemplate";
+import type { ITermTemplateContext } from "./TermTemplateContext";
 
 type QueryBatch<T> = {
   query: string;
@@ -68,7 +68,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 } ORDER BY ?priority`;
     const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
     for await (const bindings of bindingsStream) {
-      const identifier = (bindings.get('template') as RDF.NamedNode | RDF.BlankNode).value;
+      const identifier = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
       if (!this.templates.has(identifier)) {
         this.templates.set(identifier, new TermTemplate(bindings));
       }
@@ -95,7 +95,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
         templatesWithRelevance.push({ template, relevance });
       }
     }
-    return templatesWithRelevance.sort((a, b) => b.relevance - a.relevance).map(t => t.template);
+    return templatesWithRelevance.sort((a, b) => b.relevance - a.relevance).map((t) => t.template);
   }
 
   public async visualiseTerm(term: RDF.Term): Promise<string> {
@@ -109,7 +109,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
           const outputRecords = TermTemplateRenderer.bindingsToRecords(outputBindings);
           return outputRecords;
         },
-        visualiseTerm: term => this.visualiseTerm(term)
+        visualiseTerm: (term) => this.visualiseTerm(term),
       };
       try {
         return await TermTemplateRenderer.eta.renderStringAsync(template.text, templateContext);
@@ -134,21 +134,30 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
   public bindingsToValues(bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): Algebra.Values {
     return this.algebraFactory.createValues(
-      [...new Set(bindings.flatMap(b => Object.keys(b)))].map(s => this.dataFactory.variable(s)),
-      bindings
+      [...new Set(bindings.flatMap((b) => Object.keys(b)))].map((s) =>
+        this.dataFactory.variable(s),
+      ),
+      bindings,
     );
   }
 
   /**
    * Generate a query identifier that takes into account also the binding values.
    */
-  public generateQueryIdentifier(query: string, sources: string[], bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): RDF.NamedNode {
+  public generateQueryIdentifier(
+    query: string,
+    sources: string[],
+    bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ): RDF.NamedNode {
     const value = JSON.stringify({
       query,
       sources: sources.sort(),
       // Ensure the binding objects always sorted identically
-      bindings: bindings.map(b => Object.fromEntries(Object.entries(b).sort((t1, t2) => t1[0].localeCompare(t2[0]))))
-        .sort((b1, b2) => JSON.stringify(b1).localeCompare(JSON.stringify(b2)))
+      bindings: bindings
+        .map((b) =>
+          Object.fromEntries(Object.entries(b).sort((t1, t2) => t1[0].localeCompare(t2[0]))),
+        )
+        .sort((b1, b2) => JSON.stringify(b1).localeCompare(JSON.stringify(b2))),
     });
     const hash = MurmurHash3(value).result().toString(16);
     return this.dataFactory.namedNode(`urn:query:${hash}`);
@@ -157,12 +166,16 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   /**
    * Generate a query batch identifier, to allow grouping together identical queries to a single source.
    */
-  public generateQueryBatchIdentifier(query: string, sources: string[], bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): RDF.NamedNode {
+  public generateQueryBatchIdentifier(
+    query: string,
+    sources: string[],
+    bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ): RDF.NamedNode {
     const value = JSON.stringify({
       query,
       sources: sources.sort(),
       // Only considers the keys, because different values could exist for the variables
-      bindings: [...new Set(bindings.flatMap(b => Object.keys(b))).values()].sort()
+      bindings: [...new Set(bindings.flatMap((b) => Object.keys(b))).values()].sort(),
     });
     const hash = MurmurHash3(value).result().toString(16);
     return this.dataFactory.namedNode(`urn:batch:${hash}`);
@@ -176,19 +189,22 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     sources: string[],
     bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
     buffer: QueryBuffer<T>,
-    executor: (batchIdentifier: RDF.NamedNode) => Promise<void>
+    executor: (batchIdentifier: RDF.NamedNode) => Promise<void>,
   ): Promise<T> {
     const queryIdentifier = this.generateQueryIdentifier(query, sources, bindings);
     const batchIdentifier = this.generateQueryBatchIdentifier(query, sources, bindings);
 
     // Add the current query identifier to the bindings
-    bindings = bindings.map(b => ({ ...b, [this.queryIdentifierVariable.value]: queryIdentifier }));
+    bindings = bindings.map((b) => ({
+      ...b,
+      [this.queryIdentifierVariable.value]: queryIdentifier,
+    }));
 
     return new Promise<T>((resolve, reject) => {
       if (buffer[batchIdentifier.value]) {
         if (
-          buffer[batchIdentifier.value].resolutions[queryIdentifier.value]
-          && buffer[batchIdentifier.value].rejections[queryIdentifier.value]
+          buffer[batchIdentifier.value].resolutions[queryIdentifier.value] &&
+          buffer[batchIdentifier.value].rejections[queryIdentifier.value]
         ) {
           buffer[batchIdentifier.value].resolutions[queryIdentifier.value].push(resolve);
           buffer[batchIdentifier.value].rejections[queryIdentifier.value].push(reject);
@@ -203,7 +219,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
           sources,
           bindings,
           resolutions: { [queryIdentifier.value]: [resolve] },
-          rejections: { [queryIdentifier.value]: [reject] }
+          rejections: { [queryIdentifier.value]: [reject] },
         };
         setTimeout(() => executor(batchIdentifier), this.batchWindowMilliseconds);
       }
@@ -216,7 +232,10 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     return bindingsArray;
   }
 
-  public async executeAsk(buffer: QueryBuffer<boolean>, batchIdentifier: RDF.NamedNode): Promise<void> {
+  public async executeAsk(
+    buffer: QueryBuffer<boolean>,
+    batchIdentifier: RDF.NamedNode,
+  ): Promise<void> {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
@@ -225,14 +244,15 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const selectOperation = algebraUtils.mapOperation(askOperation, {
       ask: {
         preVisitor: () => ({ shortcut: true, copy: false }),
-        transform: (_, op) => this.algebraFactory.createProject(
-          this.algebraFactory.createFilter(
-            this.bindingsToValues(batch.bindings),
-            this.algebraFactory.createExistenceExpression(false, op.input)
+        transform: (_, op) =>
+          this.algebraFactory.createProject(
+            this.algebraFactory.createFilter(
+              this.bindingsToValues(batch.bindings),
+              this.algebraFactory.createExistenceExpression(false, op.input),
+            ),
+            [this.queryIdentifierVariable],
           ),
-          [this.queryIdentifierVariable]
-        )
-      }
+      },
     }) as Algebra.Operation;
 
     try {
@@ -241,7 +261,8 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
       // Report existence to their corresponding queries
       for (const bindings of bindingsArray) {
-        const queryIdentifier = (bindings.get(this.queryIdentifierVariable.value) as RDF.NamedNode).value;
+        const queryIdentifier = (bindings.get(this.queryIdentifierVariable.value) as RDF.NamedNode)
+          .value;
         for (const resolution of batch.resolutions[queryIdentifier]) {
           resolution(true);
         }
@@ -266,7 +287,10 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     }
   }
 
-  public async executeSelect(buffer: QueryBuffer<RDF.Bindings[]>, batchIdentifier: RDF.NamedNode): Promise<void> {
+  public async executeSelect(
+    buffer: QueryBuffer<RDF.Bindings[]>,
+    batchIdentifier: RDF.NamedNode,
+  ): Promise<void> {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
@@ -275,14 +299,12 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
       project: {
         preVisitor: () => ({ shortcut: true, copy: false }),
-        transform: (_copy, op) => this.algebraFactory.createProject(
-          this.algebraFactory.createJoin([
-            op.input,
-            this.bindingsToValues(batch.bindings)
-          ]),
-          [...op.variables, this.queryIdentifierVariable]
-        )
-      }
+        transform: (_copy, op) =>
+          this.algebraFactory.createProject(
+            this.algebraFactory.createJoin([op.input, this.bindingsToValues(batch.bindings)]),
+            [...op.variables, this.queryIdentifierVariable],
+          ),
+      },
     }) as Algebra.Operation;
 
     try {
@@ -291,7 +313,8 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
       const bindingsByQuery: Record<string, RDF.Bindings[]> = {};
 
       for (const bindings of bindingsArray) {
-        const queryIdentifier = (bindings.get(this.queryIdentifierVariable.value) as RDF.NamedNode).value;
+        const queryIdentifier = (bindings.get(this.queryIdentifierVariable.value) as RDF.NamedNode)
+          .value;
         if (bindingsByQuery[queryIdentifier]) {
           bindingsByQuery[queryIdentifier].push(bindings);
         } else {
@@ -325,12 +348,28 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     }
   }
 
-  public async askBatched(query: string, sources: string[], bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): Promise<boolean> {
-    return this.executeBatched<boolean>(query, sources, bindings, this.askBuffer, batch => this.executeAsk(this.askBuffer, batch));
+  public async askBatched(
+    query: string,
+    sources: string[],
+    bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ): Promise<boolean> {
+    return this.executeBatched<boolean>(query, sources, bindings, this.askBuffer, (batch) =>
+      this.executeAsk(this.askBuffer, batch),
+    );
   }
 
-  public async selectBatched(query: string, sources: string[], bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): Promise<RDF.Bindings[]> {
-    return this.executeBatched<RDF.Bindings[]>(query, sources, bindings, this.selectBuffer, batch => this.executeSelect(this.selectBuffer, batch));
+  public async selectBatched(
+    query: string,
+    sources: string[],
+    bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ): Promise<RDF.Bindings[]> {
+    return this.executeBatched<RDF.Bindings[]>(
+      query,
+      sources,
+      bindings,
+      this.selectBuffer,
+      (batch) => this.executeSelect(this.selectBuffer, batch),
+    );
   }
 }
 
@@ -359,4 +398,9 @@ interface ITermTemplateRendererOptions {
   queryIdentifierVariable: string;
 }
 
-export { TermTemplateRenderer, type ITermTemplateRendererOptions, type QueryBatch, type QueryBuffer };
+export {
+  TermTemplateRenderer,
+  type ITermTemplateRendererOptions,
+  type QueryBatch,
+  type QueryBuffer,
+};
