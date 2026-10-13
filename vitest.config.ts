@@ -1,56 +1,44 @@
-import { compilerOptions } from './tsconfig.build.json' with { type: 'json' };
-import { defineConfig } from 'vitest/config';
-import { playwright } from '@vitest/browser-playwright';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import { compilerOptions } from "./tsconfig.json" with { type: "json" };
+import { defineConfig } from "vitest/config";
+import { playwright } from "@vitest/browser-playwright";
 
-const browsers: ('chromium' | 'firefox' | 'webkit')[] = [
-  'chromium',
-  'firefox',
-  'webkit'
-];
+const browsers: ("chromium" | "firefox" | "webkit")[] = ["chromium", "firefox", "webkit"];
 
 export default defineConfig({
   build: {
-    target: compilerOptions.target
+    target: compilerOptions.target,
   },
   test: {
     coverage: {
-      provider: 'istanbul',
+      provider: "istanbul",
       thresholds: {
         autoUpdate: true,
         branches: 100,
         functions: 100,
         lines: 100,
         perFile: true,
-        statements: 100
-      }
+        statements: 100,
+      },
     },
     projects: [
-      ...browsers.map(browser => ({
+      ...browsers.map((browser) => ({
         test: {
           browser: {
             enabled: true,
             headless: true,
-            instances: [
-              { browser }
-            ],
-            provider: playwright({ actionTimeout: 1_000 }),
-            screenshotFailures: false
+            instances: [{ browser }],
+            provider: playwright(),
+            screenshotFailures: false,
           },
-          name: browser
-        }
+          name: browser,
+        },
       })),
       {
         test: {
-          environment: 'node',
-          name: 'node'
-        }
-      }
-    ]
+          environment: "node",
+          name: "node",
+        },
+      },
+    ],
   },
-  plugins: [
-    nodePolyfills({
-      include: ['events']
-    })
-  ]
 });
