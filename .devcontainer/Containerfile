@@ -1,0 +1,3 @@
+FROM mcr.microsoft.com/devcontainers/typescript-node:26
+
+RUN sudo npm install --force --global corepack
