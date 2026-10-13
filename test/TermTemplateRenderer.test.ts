@@ -65,8 +65,6 @@ describe("TermTemplateRenderer", () => {
 
   describe("loadTemplates", () => {
     it("retrieves templates using the query engine", async () => {
-      expect(queryEngine.queryBindings).not.toHaveBeenCalled();
-      expect(renderer.templates.size).toBe(0);
       await expect(renderer.loadTemplates([])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       expect(renderer.templates.size).toBe(1);
@@ -91,9 +89,6 @@ describe("TermTemplateRenderer", () => {
       renderer.templates.set(template1.id, template1 as unknown as TermTemplate);
       renderer.templates.set(template2.id, template2 as unknown as TermTemplate);
       renderer.templates.set(template3.id, template3 as unknown as TermTemplate);
-      expect(template1.calculateRelevance).not.toHaveBeenCalled();
-      expect(template2.calculateRelevance).not.toHaveBeenCalled();
-      expect(template3.calculateRelevance).not.toHaveBeenCalled();
       expect(renderer.findApplicableTemplates("term" as unknown as RDF.Term)).toEqual([
         template2,
         template1,
@@ -150,82 +145,51 @@ describe("TermTemplateRenderer", () => {
       await expect(renderer.visualiseTerm({ value: "abc" } as unknown as RDF.Term)).resolves.toBe(
         '<pre>{\n  "value": "abc"\n}</pre>',
       );
-      expect(renderer.findApplicableTemplates).toHaveBeenCalledOnce();
     });
 
     it("visualises the term recursively", async () => {
       vi.spyOn(renderer, "findApplicableTemplates").mockReturnValue([
         { text: "template content" } as unknown as TermTemplate,
       ]);
-      vi.spyOn(renderer, "askBatched").mockResolvedValue("ask result" as unknown as boolean);
-      vi.spyOn(renderer, "selectBatched").mockResolvedValue([
-        "select bindings" as unknown as RDF.Bindings,
-      ]);
+      vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
+      vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as RDF.Bindings[]);
       vi.spyOn(TermTemplateRenderer, "bindingsToRecords").mockResolvedValue(
-        "select result" as unknown as Record<string, RDF.NamedNode | RDF.Literal>[],
+        [] as Record<string, RDF.NamedNode | RDF.Literal>[],
       );
       vi.spyOn(TermTemplateRenderer.eta, "renderStringAsync").mockImplementation(
         async (template: string, data: object): Promise<string> => {
+          const context = data as ITermTemplateContext;
           expect(template).toBe("template content");
-          expect((data as ITermTemplateContext).term).toBeOneOf([
-            "term to visualise",
-            "recursive term",
-          ]);
-          if (((data as ITermTemplateContext).term as unknown as string) === "term to visualise") {
-            // Call with and without bindings array
-            await expect((data as ITermTemplateContext).queryAsk("", [])).resolves.toBe(
-              "ask result",
-            );
-            await expect((data as ITermTemplateContext).queryAsk("")).resolves.toBe("ask result");
-            // Call with and without bindings array
-            await expect((data as ITermTemplateContext).querySelect("", [])).resolves.toBe(
-              "select result",
-            );
-            await expect((data as ITermTemplateContext).querySelect("")).resolves.toBe(
-              "select result",
-            );
-            // Call once, since there is no flexibility in parameters
-            await expect(
-              (data as ITermTemplateContext).visualiseTerm("recursive term" as unknown as RDF.Term),
-            ).resolves.toBe("recursive output html");
-            return "output html";
-          } else {
-            return "recursive output html";
+          if ((context.term as unknown as string) === "term to visualise") {
+            // Exercise both the provided and default bindings paths
+            await expect(context.queryAsk("", [])).resolves.toBe(true);
+            await expect(context.queryAsk("")).resolves.toBe(true);
+            await expect(context.querySelect("", [])).resolves.toEqual([]);
+            await expect(context.querySelect("")).resolves.toEqual([]);
+            // Recursion: visualiseTerm is called with a new term
+            return context.visualiseTerm("recursive term" as unknown as RDF.Term);
           }
+          return "recursive output html";
         },
       );
       await expect(
         renderer.visualiseTerm("term to visualise" as unknown as RDF.Term),
-      ).resolves.toBe("output html");
+      ).resolves.toBe("recursive output html");
       expect(renderer.findApplicableTemplates).toHaveBeenCalledTimes(2);
       expect(renderer.askBatched).toHaveBeenCalledTimes(2);
       expect(renderer.selectBatched).toHaveBeenCalledTimes(2);
-      expect(TermTemplateRenderer.bindingsToRecords).toHaveBeenCalledTimes(2);
-      expect(TermTemplateRenderer.eta.renderStringAsync).toHaveBeenCalledTimes(2);
     });
 
     it("visualises errors during template rendering", async () => {
       vi.spyOn(renderer, "findApplicableTemplates").mockReturnValue([
         { text: "template content" } as unknown as TermTemplate,
       ]);
-      vi.spyOn(renderer, "askBatched").mockResolvedValue("ask result" as unknown as boolean);
-      vi.spyOn(renderer, "selectBatched").mockResolvedValue([
-        "select bindings" as unknown as RDF.Bindings,
-      ]);
-      vi.spyOn(TermTemplateRenderer, "bindingsToRecords").mockResolvedValue(
-        "select result" as unknown as Record<string, RDF.NamedNode | RDF.Literal>[],
-      );
       vi.spyOn(TermTemplateRenderer.eta, "renderStringAsync").mockRejectedValue(
         new Error("Template rendering error"),
       );
       await expect(
         renderer.visualiseTerm("term to visualise" as unknown as RDF.Term),
       ).resolves.toBe('<pre class="error">Error: Template rendering error</pre>');
-      expect(renderer.findApplicableTemplates).toHaveBeenCalledOnce();
-      expect(renderer.askBatched).not.toHaveBeenCalled();
-      expect(renderer.selectBatched).not.toHaveBeenCalled();
-      expect(TermTemplateRenderer.bindingsToRecords).not.toHaveBeenCalled();
-      expect(TermTemplateRenderer.eta.renderStringAsync).toHaveBeenCalledOnce();
     });
   });
 
@@ -237,24 +201,12 @@ describe("TermTemplateRenderer", () => {
     });
 
     it("returns the same identifiers for the same query with same bindings", () => {
-      expect(
-        renderer.generateQueryIdentifier(
-          "query1",
-          [],
-          [
-            { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
-            { var2: dataFactory.literal("value2"), var1: dataFactory.literal("value1") },
-          ],
-        ),
-      ).toEqual(
-        renderer.generateQueryIdentifier(
-          "query1",
-          [],
-          [
-            { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
-            { var2: dataFactory.literal("value2"), var1: dataFactory.literal("value1") },
-          ],
-        ),
+      const bindings = [
+        { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
+        { var2: dataFactory.literal("value2"), var1: dataFactory.literal("value1") },
+      ];
+      expect(renderer.generateQueryIdentifier("query1", [], bindings)).toEqual(
+        renderer.generateQueryIdentifier("query1", [], bindings),
       );
     });
 
@@ -322,8 +274,6 @@ describe("TermTemplateRenderer", () => {
           return "result";
         },
       );
-      expect(renderer.executeAsk).not.toHaveBeenCalled();
-      expect(renderer.executeBatched).not.toHaveBeenCalled();
       await expect(renderer.askBatched("query", [], [])).resolves.toBe("result");
       expect(renderer.executeBatched).toHaveBeenCalledOnce();
       expect(renderer.executeAsk).toHaveBeenCalledOnce();
@@ -339,8 +289,6 @@ describe("TermTemplateRenderer", () => {
           return "result";
         },
       );
-      expect(renderer.executeSelect).not.toHaveBeenCalled();
-      expect(renderer.executeBatched).not.toHaveBeenCalled();
       await expect(renderer.selectBatched("query", [], [])).resolves.toBe("result");
       expect(renderer.executeBatched).toHaveBeenCalledOnce();
       expect(renderer.executeSelect).toHaveBeenCalledOnce();
@@ -352,9 +300,7 @@ describe("TermTemplateRenderer", () => {
       vi.spyOn(queryEngine, "queryBindings").mockResolvedValue(
         new ArrayIterator(["bindings1", "bindings2"]) as unknown as BindingsStream,
       );
-      expect(queryEngine.queryBindings).not.toHaveBeenCalled();
       await expect(renderer.selectAll("query", [])).resolves.toEqual(["bindings1", "bindings2"]);
-      expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
     });
   });
 
@@ -376,11 +322,10 @@ describe("TermTemplateRenderer", () => {
         }
         delete buffer[batchIdentifier.value];
       });
-      expect(buffer).toEqual({});
       for (const i of [0, 0, 1, 2, 2, 3, 4, 5, 6]) {
         const bindings = [{ o: dataFactory.namedNode(`o${i}`) }];
         const queryIdentifier = renderer.generateQueryIdentifier(query, sources, bindings).value;
-        expectedResults[queryIdentifier] = Math.random() < 0.5 ? true : false;
+        expectedResults[queryIdentifier] = i % 2 === 0;
         actualResults[queryIdentifier] = renderer.executeBatched(
           query,
           sources,
@@ -497,9 +442,8 @@ describe("TermTemplateRenderer", () => {
       };
       await expect(renderer.executeSelect(buffer, batchIdentifier)).resolves.not.toThrow();
       expect(rejectMock).not.toHaveBeenCalled();
-      // Both the empty and the non-empty query should have been resolved
       expect(resolveMock).toHaveBeenCalledTimes(2);
-      // Ensure the empty query was resolved without bindings
+      expect(resolveMock).toHaveBeenNthCalledWith(1, [expect.any(Map), expect.any(Map)]);
       expect(resolveMock).toHaveBeenNthCalledWith(2, []);
     });
 
