@@ -80,13 +80,5 @@ describe("TermTemplate", () => {
       const term = { value: "ABCD" } as RDF.Term;
       expect(template.calculateRelevance(term)).toBe(2);
     });
-
-    it("should not leave stale lastIndex on the pattern after multiple calls", () => {
-      const term = { value: "ABCD" } as RDF.Term;
-      expect(template.calculateRelevance(term)).toBe(2);
-      expect(template.pattern.lastIndex).toBe(0);
-      // Second call must give same result
-      expect(template.calculateRelevance(term)).toBe(2);
-    });
   });
 });

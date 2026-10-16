@@ -24,7 +24,6 @@ class TermTemplate {
    * @returns The relevance as a numeric value, where higher is more relevant.
    */
   public calculateRelevance(term: RDF.Term): number {
-    this.pattern.lastIndex = 0;
     const match = this.pattern.exec(term.value);
     return match?.[0].length ?? Number.NEGATIVE_INFINITY;
   }
