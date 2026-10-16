@@ -1,13 +1,13 @@
-import { compilerOptions } from "./tsconfig.json" with { type: "json" };
 import { defineConfig } from "vitest/config";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 import { playwright } from "@vitest/browser-playwright";
+import tsconfig from "./tsconfig.json" with { type: "json" };
 
 const browsers: ("chromium" | "firefox" | "webkit")[] = ["chromium", "firefox", "webkit"];
 
 export default defineConfig({
   build: {
-    target: compilerOptions.target,
+    target: tsconfig.compilerOptions.target,
   },
   test: {
     coverage: {
