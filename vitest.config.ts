@@ -1,5 +1,6 @@
 import { compilerOptions } from "./tsconfig.json" with { type: "json" };
 import { defineConfig } from "vitest/config";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
 import { playwright } from "@vitest/browser-playwright";
 
 const browsers: ("chromium" | "firefox" | "webkit")[] = ["chromium", "firefox", "webkit"];
@@ -43,4 +44,9 @@ export default defineConfig({
     ],
     include: ["test/**/*.test.ts"],
   },
+  plugins: [
+    nodePolyfills({
+      include: ["events"],
+    }),
+  ],
 });
