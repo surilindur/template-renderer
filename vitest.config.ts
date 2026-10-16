@@ -10,6 +10,7 @@ export default defineConfig({
   },
   test: {
     coverage: {
+      enabled: true,
       provider: "istanbul",
       thresholds: {
         autoUpdate: true,
