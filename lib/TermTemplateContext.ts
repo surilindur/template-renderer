@@ -1,4 +1,4 @@
-import type * as RDF from '@rdfjs/types';
+import type * as RDF from "@rdfjs/types";
 
 /**
  * The context expected to be present in each term template.
@@ -17,11 +17,17 @@ interface ITermTemplateContext {
   /**
    * Execute a SPARQL SELECT query against the current template's target.
    */
-  querySelect: (query: string, bindings?: Record<string, RDF.NamedNode | RDF.Literal>[]) => Promise<Record<string, RDF.Term>[]>;
+  querySelect: (
+    query: string,
+    bindings?: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ) => Promise<Record<string, RDF.Term>[]>;
   /**
    * Execute a SPARQL ASK query against the current template's target.
    */
-  queryAsk: (query: string, bindings?: Record<string, RDF.NamedNode | RDF.Literal>[]) => Promise<boolean>;
+  queryAsk: (
+    query: string,
+    bindings?: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ) => Promise<boolean>;
 }
 
 export type { ITermTemplateContext };

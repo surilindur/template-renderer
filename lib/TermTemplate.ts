@@ -1,4 +1,4 @@
-import type * as RDF from '@rdfjs/types';
+import type * as RDF from "@rdfjs/types";
 
 /**
  * Representation of an RDF term template in TypeScript,
@@ -11,10 +11,10 @@ class TermTemplate {
   public readonly target: string;
 
   public constructor(bindings: RDF.Bindings) {
-    this.id = (bindings.get('template') as RDF.Literal).value;
-    this.pattern = new RegExp((bindings.get('pattern') as RDF.Literal).value, 'u');
-    this.text = (bindings.get('text') as RDF.Literal).value;
-    this.target = (bindings.get('target') as RDF.NamedNode).value;
+    this.id = (bindings.get("template") as RDF.Literal).value;
+    this.pattern = new RegExp((bindings.get("pattern") as RDF.Literal).value, "u");
+    this.text = (bindings.get("text") as RDF.Literal).value;
+    this.target = (bindings.get("target") as RDF.NamedNode).value;
   }
 
   /**

@@ -1,9 +1,12 @@
 {
-  "extends": "./tsconfig.build.json",
-  "include": [
-    "**/*.ts"
-  ],
-  "exclude": [
-    "**/*.d.ts"
-  ]
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "resolveJsonModule": true
+  },
+  "include": ["lib/", "test/", "vitest.config.ts"]
 }
