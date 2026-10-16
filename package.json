@@ -24,7 +24,7 @@
     "build": "tsc --project tsconfig.build.json",
     "format": "oxfmt",
     "lint": "oxlint",
-    "test": "vitest run --coverage --project node",
+    "test": "vitest run --project node",
     "prepack": "yarn run build"
   },
   "dependencies": {
@@ -47,6 +47,7 @@
     "oxlint": "^1.0.0",
     "playwright": "^1.0.0",
     "typescript": "^7.0.0",
+    "vite": "^8.0.0",
     "vitest": "^5.0.0"
   },
   "packageManager": "yarn@4.18.1"
