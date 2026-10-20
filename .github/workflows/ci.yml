@@ -45,11 +45,6 @@ jobs:
       - run: yarn install --immutable
       - run: yarn run build
       - run: yarn vitest run --project node
-      - uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
-        with:
-          github-token: ${{ secrets.github_token }}
-          flag-name: node-${{ matrix.node-version }}
-          parallel: true
 
   browser:
     needs: lint
@@ -70,19 +65,17 @@ jobs:
       - run: yarn run build
       - run: yarn playwright install --with-deps ${{ matrix.browser }}
       - run: yarn vitest run --project ${{ matrix.browser }}
-      - uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
-        with:
-          github-token: ${{ secrets.github_token }}
-          flag-name: browser-${{ matrix.browser }}
-          parallel: true
 
-  coveralls:
+  pack:
     needs:
       - node
       - browser
     runs-on: ubuntu-26.04
     steps:
-      - uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          github-token: ${{ secrets.github_token }}
-          parallel-finished: true
+          node-version: ${{ env.DEFAULT_NODE_VERSION }}
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn pack
