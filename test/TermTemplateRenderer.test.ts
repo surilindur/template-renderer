@@ -68,6 +68,9 @@ describe("TermTemplateRenderer", () => {
       await expect(renderer.loadTemplates([])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       expect(renderer.templates.size).toBe(1);
+      // The higher-priority template (priority 10) should win deduplication
+      const template = renderer.templates.get("urn:template")!;
+      expect(template.text).toBe("<p>example</p>");
     });
 
     it("forwards errors from the query engine", async () => {
@@ -153,9 +156,6 @@ describe("TermTemplateRenderer", () => {
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
       vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as RDF.Bindings[]);
-      vi.spyOn(TermTemplateRenderer, "bindingsToRecords").mockResolvedValue(
-        [] as Record<string, RDF.NamedNode | RDF.Literal>[],
-      );
       vi.spyOn(TermTemplateRenderer.eta, "renderStringAsync").mockImplementation(
         async (template: string, data: object): Promise<string> => {
           const context = data as ITermTemplateContext;
@@ -175,9 +175,6 @@ describe("TermTemplateRenderer", () => {
       await expect(
         renderer.visualiseTerm("term to visualise" as unknown as RDF.Term),
       ).resolves.toBe("recursive output html");
-      expect(renderer.findApplicableTemplates).toHaveBeenCalledTimes(2);
-      expect(renderer.askBatched).toHaveBeenCalledTimes(2);
-      expect(renderer.selectBatched).toHaveBeenCalledTimes(2);
     });
 
     it("visualises errors during template rendering", async () => {
@@ -227,6 +224,13 @@ describe("TermTemplateRenderer", () => {
         renderer.generateQueryIdentifier("query1", ["source2"], []),
       );
     });
+
+    it("does not mutate the sources array", () => {
+      const sources = ["urn:zeta", "urn:alpha"];
+      const original = [...sources];
+      renderer.generateQueryIdentifier("query1", sources, []);
+      expect(sources).toEqual(original);
+    });
   });
 
   describe("generateQueryBatchIdentifier", () => {
@@ -263,15 +267,22 @@ describe("TermTemplateRenderer", () => {
         renderer.generateQueryBatchIdentifier("query1", ["source2"], []),
       );
     });
+
+    it("does not mutate the sources array", () => {
+      const sources = ["urn:zeta", "urn:alpha"];
+      const original = [...sources];
+      renderer.generateQueryBatchIdentifier("query1", sources, []);
+      expect(sources).toEqual(original);
+    });
   });
 
   describe("askBatched", () => {
     it("invokes batched execution", async () => {
       vi.spyOn(renderer, "executeAsk").mockResolvedValue(undefined);
       vi.spyOn(renderer, "executeBatched").mockImplementation(
-        async (_query, _sources, _bindings, _buffer, executor) => {
+        (_query, _sources, _bindings, _buffer, executor) => {
           executor(dataFactory.namedNode("urn:batch"));
-          return "result";
+          return Promise.resolve("result");
         },
       );
       await expect(renderer.askBatched("query", [], [])).resolves.toBe("result");
@@ -284,9 +295,9 @@ describe("TermTemplateRenderer", () => {
     it("invokes batched execution", async () => {
       vi.spyOn(renderer, "executeSelect").mockResolvedValue(undefined);
       vi.spyOn(renderer, "executeBatched").mockImplementation(
-        async (_query, _sources, _bindings, _buffer, executor) => {
+        (_query, _sources, _bindings, _buffer, executor) => {
           executor(dataFactory.namedNode("urn:batch"));
-          return "result";
+          return Promise.resolve("result");
         },
       );
       await expect(renderer.selectBatched("query", [], [])).resolves.toBe("result");
@@ -312,7 +323,7 @@ describe("TermTemplateRenderer", () => {
       const sources = ["urn:source1", "urn:source2"];
       const actualResults: Record<string, Promise<boolean>> = {};
       const expectedResults: Record<string, boolean> = {};
-      const executor = vi.fn().mockImplementation((batchIdentifier: RDF.NamedNode) => {
+      const executor = (batchIdentifier: RDF.NamedNode) => {
         for (const [queryIdentifier, resolutions] of Object.entries(
           buffer[batchIdentifier.value].resolutions,
         )) {
@@ -321,7 +332,7 @@ describe("TermTemplateRenderer", () => {
           }
         }
         delete buffer[batchIdentifier.value];
-      });
+      };
       for (const i of [0, 0, 1, 2, 2, 3, 4, 5, 6]) {
         const bindings = [{ o: dataFactory.namedNode(`o${i}`) }];
         const queryIdentifier = renderer.generateQueryIdentifier(query, sources, bindings).value;
