@@ -68,6 +68,9 @@ describe("TermTemplateRenderer", () => {
       await expect(renderer.loadTemplates([])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       expect(renderer.templates.size).toBe(1);
+      // The higher-priority template (priority 10) should win deduplication
+      const template = renderer.templates.get("urn:template")!;
+      expect(template.text).toBe("<p>example</p>");
     });
 
     it("forwards errors from the query engine", async () => {
@@ -227,6 +230,13 @@ describe("TermTemplateRenderer", () => {
         renderer.generateQueryIdentifier("query1", ["source2"], []),
       );
     });
+
+    it("does not mutate the sources array", () => {
+      const sources = ["urn:zeta", "urn:alpha"];
+      const original = [...sources];
+      renderer.generateQueryIdentifier("query1", sources, []);
+      expect(sources).toEqual(original);
+    });
   });
 
   describe("generateQueryBatchIdentifier", () => {
@@ -262,6 +272,13 @@ describe("TermTemplateRenderer", () => {
       expect(renderer.generateQueryBatchIdentifier("query1", ["source1"], [])).not.toEqual(
         renderer.generateQueryBatchIdentifier("query1", ["source2"], []),
       );
+    });
+
+    it("does not mutate the sources array", () => {
+      const sources = ["urn:zeta", "urn:alpha"];
+      const original = [...sources];
+      renderer.generateQueryBatchIdentifier("query1", sources, []);
+      expect(sources).toEqual(original);
     });
   });
 

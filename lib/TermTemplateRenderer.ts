@@ -65,7 +65,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     OPTIONAL { ?template schema:order ?order . }
 
     BIND(COALESCE(?order, 0) AS ?priority)
-} ORDER BY ?priority`;
+} ORDER BY DESC(?priority)`;
     const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
     for await (const bindings of bindingsStream) {
       const identifier = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
@@ -151,7 +151,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   ): RDF.NamedNode {
     const value = JSON.stringify({
       query,
-      sources: sources.sort(),
+      sources: [...sources].sort(),
       // Ensure the binding objects always sorted identically
       bindings: bindings
         .map((b) =>
@@ -173,9 +173,9 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   ): RDF.NamedNode {
     const value = JSON.stringify({
       query,
-      sources: sources.sort(),
+      sources: [...sources].sort(),
       // Only considers the keys, because different values could exist for the variables
-      bindings: [...new Set(bindings.flatMap((b) => Object.keys(b))).values()].sort(),
+      bindings: [...new Set(bindings.flatMap((b) => Object.keys(b)))].sort(),
     });
     const hash = MurmurHash3(value).result().toString(16);
     return this.dataFactory.namedNode(`urn:batch:${hash}`);
