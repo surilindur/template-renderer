@@ -76,15 +76,11 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   }
 
   public static parseOperation(op: string): Algebra.Operation {
-    const parsedOperation = TermTemplateRenderer.sparqlParser.parse(op);
-    const parsedAlgebra = toAlgebra(parsedOperation);
-    return parsedAlgebra;
+    return toAlgebra(TermTemplateRenderer.sparqlParser.parse(op));
   }
 
   public static serializeOperation(operation: Algebra.Operation): string {
-    const operationAst = toAst(operation);
-    const operationString = TermTemplateRenderer.sparqlGenerator.generate(operationAst);
-    return operationString;
+    return TermTemplateRenderer.sparqlGenerator.generate(toAst(operation));
   }
 
   public findApplicableTemplates(term: RDF.Term): TermTemplate[] {
@@ -228,8 +224,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
   public async selectAll(query: string, sources: string[]): Promise<RDF.Bindings[]> {
     const bindingsStream = await this.queryEngine.queryBindings(query, { sources, lenient: true });
-    const bindingsArray = await bindingsStream.toArray();
-    return bindingsArray;
+    return bindingsStream.toArray();
   }
 
   public async executeAsk(
