@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@comunica/types": "^5.0.0",
+    "@rdfjs/types": "^2.0.0",
     "@traqula/algebra-sparql-1-2": "^1.0.0",
     "@traqula/algebra-transformations-1-2": "^1.0.0",
     "@traqula/generator-sparql-1-2": "^1.0.0",
@@ -38,12 +39,11 @@
     "rdf-data-factory": "^2.0.0"
   },
   "devDependencies": {
-    "@rdfjs/types": "^2.0.0",
     "@types/imurmurhash": "^0.1.0",
     "@vitest/browser-playwright": "^5.0.0",
     "@vitest/coverage-istanbul": "^5.0.0",
     "asynciterator": "^3.0.0",
-    "oxfmt": "^0.72.0",
+    "oxfmt": "^0.74.0",
     "oxlint": "^1.0.0",
     "playwright": "^1.0.0",
     "typescript": "^7.0.0",
