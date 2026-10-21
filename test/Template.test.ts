@@ -1,8 +1,8 @@
 import type * as RDF from "@rdfjs/types";
 import { describe, expect, it } from "vitest";
-import { TermTemplate } from "../lib/TermTemplate";
+import { Template } from "../lib/Template";
 
-describe("TermTemplate", () => {
+describe("Template", () => {
   describe("constructor", () => {
     it("should create an instance when all data is present", () => {
       const bindings = new Map([
@@ -11,7 +11,7 @@ describe("TermTemplate", () => {
         ["text", { value: "<p>example</p>" }],
         ["target", { value: "https://localhost/sparql" }],
       ]) as unknown as RDF.Bindings;
-      expect(new TermTemplate(bindings)).toBeInstanceOf(TermTemplate);
+      expect(new Template(bindings)).toBeInstanceOf(Template);
     });
 
     it("should throw on bad pattern", () => {
@@ -21,7 +21,7 @@ describe("TermTemplate", () => {
         ["text", { value: "<p>example</p>" }],
         ["target", { value: "https://localhost/sparql" }],
       ]) as unknown as RDF.Bindings;
-      expect(() => new TermTemplate(bindings)).toThrow();
+      expect(() => new Template(bindings)).toThrow();
     });
 
     it("should throw on missing identifier", () => {
@@ -30,7 +30,7 @@ describe("TermTemplate", () => {
         ["text", { value: "<p>example</p>" }],
         ["target", { value: "https://localhost/sparql" }],
       ]) as unknown as RDF.Bindings;
-      expect(() => new TermTemplate(bindings)).toThrow("undefined");
+      expect(() => new Template(bindings)).toThrow("undefined");
     });
 
     it("should throw on missing pattern", () => {
@@ -39,7 +39,7 @@ describe("TermTemplate", () => {
         ["text", { value: "<p>example</p>" }],
         ["target", { value: "https://localhost/sparql" }],
       ]) as unknown as RDF.Bindings;
-      expect(() => new TermTemplate(bindings)).toThrow("undefined");
+      expect(() => new Template(bindings)).toThrow("undefined");
     });
 
     it("should throw on missing text", () => {
@@ -48,7 +48,7 @@ describe("TermTemplate", () => {
         ["pattern", { value: ".*" }],
         ["target", { value: "https://localhost/sparql" }],
       ]) as unknown as RDF.Bindings;
-      expect(() => new TermTemplate(bindings)).toThrow("undefined");
+      expect(() => new Template(bindings)).toThrow("undefined");
     });
 
     it("should throw on missing target", () => {
@@ -57,7 +57,7 @@ describe("TermTemplate", () => {
         ["pattern", { value: ".*" }],
         ["text", { value: "<p>example</p>" }],
       ]) as unknown as RDF.Bindings;
-      expect(() => new TermTemplate(bindings)).toThrow("undefined");
+      expect(() => new Template(bindings)).toThrow("undefined");
     });
   });
 
@@ -69,7 +69,7 @@ describe("TermTemplate", () => {
       ["target", { value: "https://localhost/sparql" }],
     ]) as unknown as RDF.Bindings;
 
-    const template = new TermTemplate(bindings);
+    const template = new Template(bindings);
 
     it("should return negative infinity for non-matching values", () => {
       const term = { value: "B" } as RDF.Term;
@@ -91,7 +91,7 @@ describe("TermTemplate", () => {
         ["text", { value: "<p>example</p>" }],
         ["target", { value: "https://localhost/sparql" }],
       ]) as unknown as RDF.Bindings;
-      const globalTemplate = new TermTemplate(globalBindings);
+      const globalTemplate = new Template(globalBindings);
       // Replace with a global-flag pattern to exercise the lastIndex reset
       Object.defineProperty(globalTemplate, "pattern", {
         value: new RegExp("AB", "gu"),
