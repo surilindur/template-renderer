@@ -4,12 +4,24 @@ import { ArrayIterator } from "asynciterator";
 import { DataFactory } from "rdf-data-factory";
 import type { BindingsStream, IQueryEngine } from "@comunica/types";
 import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
-import type { TermTemplate } from "../lib/TermTemplate";
-import { QueryBuffer, TermTemplateRenderer } from "../lib/TermTemplateRenderer";
-import type { ITermTemplateContext } from "../lib/TermTemplateContext";
+import { TemplateRenderer } from "../lib/TemplateRenderer";
+import type { Template } from "../lib/Template";
+import type { ITemplateContext } from "../lib/TemplateContext";
 
-describe("TermTemplateRenderer", () => {
-  let renderer: TermTemplateRenderer;
+// Mirrors the module-private QueryBuffer<T> in lib/TemplateRenderer.ts,
+// which is not exported.
+type QueryBatch<T> = {
+  query: string;
+  sources: string[];
+  bindings: Record<string, RDF.NamedNode | RDF.Literal>[];
+  resolutions: Record<string, ((value: T) => void)[]>;
+  rejections: Record<string, ((error: unknown) => void)[]>;
+};
+
+type QueryBuffer<T> = Record<string, QueryBatch<T>>;
+
+describe("TemplateRenderer", () => {
+  let renderer: TemplateRenderer;
   let queryEngine: IQueryEngine;
 
   const dataFactory = new DataFactory();
@@ -48,11 +60,9 @@ describe("TermTemplateRenderer", () => {
         ]),
       ),
     } as unknown as IQueryEngine;
-    renderer = new TermTemplateRenderer({
+    renderer = new TemplateRenderer({
       queryEngine,
-      dataFactory,
-      algebraFactory,
-      batchWindow: 200,
+      queryBatchWindow: 200,
       queryIdentifierVariable: "query",
     });
   });
@@ -89,9 +99,9 @@ describe("TermTemplateRenderer", () => {
         id: "urn:template:3",
         calculateRelevance: vi.fn().mockReturnValue(Number.NEGATIVE_INFINITY),
       };
-      renderer.templates.set(template1.id, template1 as unknown as TermTemplate);
-      renderer.templates.set(template2.id, template2 as unknown as TermTemplate);
-      renderer.templates.set(template3.id, template3 as unknown as TermTemplate);
+      renderer.templates.set(template1.id, template1 as unknown as Template);
+      renderer.templates.set(template2.id, template2 as unknown as Template);
+      renderer.templates.set(template3.id, template3 as unknown as Template);
       expect(renderer.findApplicableTemplates("term" as unknown as RDF.Term)).toEqual([
         template2,
         template1,
@@ -112,7 +122,7 @@ describe("TermTemplateRenderer", () => {
           [dataFactory.variable("var1"), dataFactory.namedNode("ex:value2")],
         ]),
       ] as unknown as RDF.Bindings[];
-      expect(TermTemplateRenderer.bindingsToRecords(bindings)).toEqual([
+      expect(TemplateRenderer.bindingsToRecords(bindings)).toEqual([
         { var1: dataFactory.literal("value1") },
         { var1: dataFactory.namedNode("ex:value2") },
       ]);
@@ -131,14 +141,14 @@ describe("TermTemplateRenderer", () => {
   describe("parseOperation", () => {
     it("parses an operation", () => {
       const query = "";
-      expect(TermTemplateRenderer.parseOperation(query)).toEqual({ type: "nop" });
+      expect(TemplateRenderer.parseOperation(query)).toEqual({ type: "nop" });
     });
   });
 
   describe("serializeOperation", () => {
     it("serializes an operation", () => {
       const operation = algebraFactory.createNop();
-      expect(TermTemplateRenderer.serializeOperation(operation)).toBe("");
+      expect(TemplateRenderer.serializeOperation(operation)).toBe("");
     });
   });
 
@@ -152,13 +162,13 @@ describe("TermTemplateRenderer", () => {
 
     it("visualises the term recursively", async () => {
       vi.spyOn(renderer, "findApplicableTemplates").mockReturnValue([
-        { text: "template content" } as unknown as TermTemplate,
+        { text: "template content" } as unknown as Template,
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
       vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as RDF.Bindings[]);
-      vi.spyOn(TermTemplateRenderer.eta, "renderStringAsync").mockImplementation(
+      vi.spyOn(TemplateRenderer.eta, "renderStringAsync").mockImplementation(
         async (template: string, data: object): Promise<string> => {
-          const context = data as ITermTemplateContext;
+          const context = data as ITemplateContext;
           expect(template).toBe("template content");
           if ((context.term as unknown as string) === "term to visualise") {
             // Exercise both the provided and default bindings paths
@@ -179,9 +189,9 @@ describe("TermTemplateRenderer", () => {
 
     it("visualises errors during template rendering", async () => {
       vi.spyOn(renderer, "findApplicableTemplates").mockReturnValue([
-        { text: "template content" } as unknown as TermTemplate,
+        { text: "template content" } as unknown as Template,
       ]);
-      vi.spyOn(TermTemplateRenderer.eta, "renderStringAsync").mockRejectedValue(
+      vi.spyOn(TemplateRenderer.eta, "renderStringAsync").mockRejectedValue(
         new Error("Template rendering error"),
       );
       await expect(
@@ -323,7 +333,7 @@ describe("TermTemplateRenderer", () => {
       const sources = ["urn:source1", "urn:source2"];
       const actualResults: Record<string, Promise<boolean>> = {};
       const expectedResults: Record<string, boolean> = {};
-      const executor = (batchIdentifier: RDF.NamedNode) => {
+      const executor = async (batchIdentifier: RDF.NamedNode) => {
         for (const [queryIdentifier, resolutions] of Object.entries(
           buffer[batchIdentifier.value].resolutions,
         )) {
