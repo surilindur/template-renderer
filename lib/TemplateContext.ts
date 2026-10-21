@@ -5,7 +5,7 @@ import type * as RDF from "@rdfjs/types";
  * This includes the term itself, that is to be visualised,
  * as well as helper functions for query execution and further visualisations.
  */
-interface ITermTemplateContext {
+interface ITemplateContext {
   /**
    * The current RDF term being visualised.
    */
@@ -30,4 +30,4 @@ interface ITermTemplateContext {
   ) => Promise<boolean>;
 }
 
-export type { ITermTemplateContext };
+export type { ITemplateContext };

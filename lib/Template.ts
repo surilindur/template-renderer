@@ -4,7 +4,7 @@ import type * as RDF from "@rdfjs/types";
  * Representation of an RDF term template in TypeScript,
  * to be instantiated using a set of bindings containing the template data.
  */
-class TermTemplate {
+class Template {
   public readonly id: string;
   public readonly pattern: RegExp;
   public readonly text: string;
@@ -30,4 +30,4 @@ class TermTemplate {
   }
 }
 
-export { TermTemplate };
+export { Template };
