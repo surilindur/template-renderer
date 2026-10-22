@@ -15,9 +15,18 @@ interface ITemplateContext {
    */
   visualiseTerm: (term: RDF.Term) => Promise<string>;
   /**
-   * Execute a SPARQL SELECT query against the current template's target.
+   * Execute a SPARQL SELECT query against the current template's target,
+   * returning the first solution mapping only.
    */
   querySelect: (
+    query: string,
+    bindings?: Record<string, RDF.NamedNode | RDF.Literal>[],
+  ) => Promise<Record<string, RDF.Term> | undefined>;
+  /**
+   * Execute a SPARQL SELECT query against the current template's target,
+   * returning all solution mappings.
+   */
+  querySelectAll: (
     query: string,
     bindings?: Record<string, RDF.NamedNode | RDF.Literal>[],
   ) => Promise<Record<string, RDF.Term>[]>;
