@@ -7,8 +7,8 @@ import { AlgebraFactory, algebraUtils } from "@traqula/algebra-transformations-1
 import { Generator } from "@traqula/generator-sparql-1-2";
 import { Parser } from "@traqula/parser-sparql-1-2";
 import { toAlgebra, toAst } from "@traqula/algebra-sparql-1-2";
-import { Eta } from "eta";
-import { Template } from "./Template";
+import { Eta, type EtaConfig } from "eta";
+import { ITemplate } from "./Template";
 import type { ITemplateContext } from "./TemplateContext";
 
 type QueryBatch<T> = {
@@ -21,22 +21,28 @@ type QueryBatch<T> = {
 
 type QueryBuffer<T> = Record<string, QueryBatch<T>>;
 
-class TemplateRenderer {
+interface ITemplateRenderer {
+  loadTemplates: (sources: QuerySourceUnidentified[]) => Promise<void>;
+  visualiseTerm: (term: RDF.Term) => Promise<string>;
+}
+
+class TemplateRenderer implements ITemplateRenderer {
+  public readonly eta: Eta;
   public readonly queryEngine: IQueryEngine;
   public readonly dataFactory: DataFactory;
   public readonly algebraFactory: AlgebraFactory;
 
-  public readonly templates: Map<string, Template>;
+  public readonly templates: Map<string, ITemplate>;
   public readonly selectBuffer: QueryBuffer<RDF.Bindings[]>;
   public readonly askBuffer: QueryBuffer<boolean>;
   public readonly batchWindowMilliseconds: number;
   public readonly queryIdentifierVariable: RDF.Variable;
 
-  public static readonly eta = new Eta({ useWith: true });
   public static readonly sparqlParser = new Parser();
   public static readonly sparqlGenerator = new Generator();
 
   public constructor(options: ITemplateRendererOptions) {
+    this.eta = new Eta(options.etaOptions ?? { useWith: true });
     this.queryEngine = options.queryEngine;
     this.dataFactory = new DataFactory();
     this.algebraFactory = new AlgebraFactory(this.dataFactory);
@@ -68,11 +74,42 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 } ORDER BY DESC(?priority)`;
     const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
     for await (const bindings of bindingsStream) {
-      const identifier = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
-      if (!this.templates.has(identifier)) {
-        this.templates.set(identifier, new Template(bindings));
+      const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
+      if (!this.templates.has(template)) {
+        this.templates.set(template, {
+          content: (bindings.get("text") as RDF.Literal).value,
+          pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
+          target: (bindings.get("target") as RDF.NamedNode).value,
+        });
       }
     }
+  }
+
+  /**
+   * Finds all applicable templates for the specified term.
+   * @param term The term to find templates for.
+   * @returns The templates, sorted by relevance.
+   */
+  public findTemplates(term: RDF.Term): ITemplate[] {
+    const templatesWithRelevance: { template: ITemplate; relevance: number }[] = [];
+    for (const template of this.templates.values()) {
+      const relevance = TemplateRenderer.calculateRelevance(template, term);
+      if (relevance >= 0) {
+        templatesWithRelevance.push({ template, relevance });
+      }
+    }
+    return templatesWithRelevance.sort((a, b) => b.relevance - a.relevance).map((t) => t.template);
+  }
+
+  /**
+   * Calculate the relevance score for this template against the specified RDF term.
+   * The relevance is based on regex match length, with longer match being more relevant.
+   * @param term The RDF term to calculate relevance for.
+   * @returns The relevance as a numeric value, where higher is more relevant.
+   */
+  public static calculateRelevance(template: ITemplate, term: RDF.Term): number {
+    const match = template.pattern.exec(term.value);
+    return match?.[0].length ?? Number.NEGATIVE_INFINITY;
   }
 
   public static parseOperation(op: string): Algebra.Operation {
@@ -83,19 +120,8 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     return TemplateRenderer.sparqlGenerator.generate(toAst(operation));
   }
 
-  public findApplicableTemplates(term: RDF.Term): Template[] {
-    const templatesWithRelevance: { template: Template; relevance: number }[] = [];
-    for (const template of this.templates.values()) {
-      const relevance = template.calculateRelevance(term);
-      if (relevance >= 0) {
-        templatesWithRelevance.push({ template, relevance });
-      }
-    }
-    return templatesWithRelevance.sort((a, b) => b.relevance - a.relevance).map((t) => t.template);
-  }
-
   public async visualiseTerm(term: RDF.Term): Promise<string> {
-    const template = this.findApplicableTemplates(term).at(0);
+    const template = this.findTemplates(term).at(0);
     if (template) {
       const templateContext: ITemplateContext = {
         term,
@@ -103,17 +129,22 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
         querySelect: async (query, bindings) => {
           const outputBindings = await this.selectBatched(query, [template.target], bindings ?? []);
           const outputRecords = TemplateRenderer.bindingsToRecords(outputBindings);
+          return outputRecords.at(0);
+        },
+        querySelectAll: async (query, bindings) => {
+          const outputBindings = await this.selectBatched(query, [template.target], bindings ?? []);
+          const outputRecords = TemplateRenderer.bindingsToRecords(outputBindings);
           return outputRecords;
         },
         visualiseTerm: (term) => this.visualiseTerm(term),
       };
       try {
-        return await TemplateRenderer.eta.renderStringAsync(template.text, templateContext);
+        return await this.eta.renderStringAsync(template.content, templateContext);
       } catch (error: unknown) {
         return `<pre class="error">${error}</pre>`;
       }
     }
-    return `<pre>${JSON.stringify(term, undefined, 2)}</pre>`;
+    return `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
   }
 
   public static bindingsToRecords(bindings: RDF.Bindings[]): Record<string, RDF.Term>[] {
@@ -139,6 +170,9 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
   /**
    * Generate a query identifier that takes into account also the binding values.
+   * The bindings values have their keys sorted, and then the bindings themselves
+   * are also sorted, to ensure the same query with the same bindings gets the same
+   * identifier, regardless of the original order of bindings or their keys.
    */
   public generateQueryIdentifier(
     query: string,
@@ -160,7 +194,10 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   }
 
   /**
-   * Generate a query batch identifier, to allow grouping together identical queries to a single source.
+   * Generate a query batch identifier, to allow grouping together identical queries
+   * to a single source. The batch considers the query, as well as the total set of
+   * bindings keys (bound variables), but ignores the values. The values will only be
+   * used for grouping identical queries together.
    */
   public generateQueryBatchIdentifier(
     query: string,
@@ -170,7 +207,6 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const value = JSON.stringify({
       query,
       sources: [...sources].sort(),
-      // Only considers the keys, because different values could exist for the variables
       bindings: [...new Set(bindings.flatMap((b) => Object.keys(b)))].sort(),
     });
     const hash = MurmurHash3(value).result().toString(16);
@@ -370,7 +406,8 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
 interface ITemplateRendererOptions {
   /**
-   * The query engine to use for template retrieval and within the templates themselves.
+   * The query engine to use for template retrieval, as well as
+   * the queries within the templates themselves.
    */
   queryEngine: IQueryEngine;
   /**
@@ -383,6 +420,17 @@ interface ITemplateRendererOptions {
    * with existing variables in queries, including the queries within templates.
    */
   queryIdentifierVariable: string;
+  /**
+   * Optional confgiguration for the Eta template engine.
+   * Use of with for async is always required.
+   */
+  etaOptions?: Partial<EtaConfig> & { useWith: true };
 }
 
-export { TemplateRenderer, type ITemplateRendererOptions };
+export {
+  TemplateRenderer,
+  type ITemplateRenderer,
+  type ITemplateRendererOptions,
+  type QueryBatch,
+  type QueryBuffer,
+};
