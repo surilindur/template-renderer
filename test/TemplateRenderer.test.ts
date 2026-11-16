@@ -3,13 +3,66 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArrayIterator } from "asynciterator";
 import { DataFactory } from "rdf-data-factory";
 import type { BindingsStream, IQueryEngine } from "@comunica/types";
+import type { Algebra } from "@traqula/algebra-transformations-1-2";
 import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
-import { TemplateRenderer, type QueryBuffer } from "../lib/TemplateRenderer";
+import type { Eta } from "eta";
+import { ITemplateRenderer, TemplateRenderer, type QueryBuffer } from "../lib/TemplateRenderer";
 import type { ITemplate } from "../lib/Template";
 import type { ITemplateContext } from "../lib/TemplateContext";
 
 describe("TemplateRenderer", () => {
-  let renderer: TemplateRenderer;
+  let renderer: ITemplateRenderer & {
+    // Non-public members of TemplateRenderer accessed by the tests.
+    // Declaring them here avoids type casts in the test body while keeping
+    // them unexposed in the class itself.
+    templates: Map<string, ITemplate>;
+    findTemplates: (term: RDF.Term) => ITemplate[];
+    eta: Eta;
+    bindingsToValues: (bindings: Record<string, RDF.NamedNode | RDF.Literal>[]) => Algebra.Values;
+    generateQueryIdentifier: (
+      query: string,
+      sources: string[],
+      bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+    ) => RDF.NamedNode;
+    generateQueryBatchIdentifier: (
+      query: string,
+      sources: string[],
+      bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+    ) => RDF.NamedNode;
+    executeBatched: <T>(
+      query: string,
+      sources: string[],
+      bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+      buffer: QueryBuffer<T>,
+      executor: (batchIdentifier: RDF.NamedNode) => Promise<void>,
+    ) => Promise<T>;
+    selectAll: (query: string, sources: string[]) => Promise<RDF.Bindings[]>;
+    executeAsk: (buffer: QueryBuffer<boolean>, batchIdentifier: RDF.NamedNode) => Promise<void>;
+    executeSelect: (
+      buffer: QueryBuffer<RDF.Bindings[]>,
+      batchIdentifier: RDF.NamedNode,
+    ) => Promise<void>;
+    askBatched: (
+      query: string,
+      sources: string[],
+      bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+    ) => Promise<boolean>;
+    selectBatched: (
+      query: string,
+      sources: string[],
+      bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
+    ) => Promise<RDF.Bindings[]>;
+  };
+
+  // The protected static members of TemplateRenderer accessed by the tests. A
+  // single cast exposes them as public so they can be called through the class
+  // without a cast at every call site.
+  const statics = TemplateRenderer as unknown as {
+    bindingsToRecords: (bindings: RDF.Bindings[]) => Record<string, RDF.Term>[];
+    parseOperation: (op: string) => Algebra.Operation;
+    serializeOperation: (operation: Algebra.Operation) => string;
+  };
+
   let queryEngine: IQueryEngine;
 
   const dataFactory = new DataFactory();
@@ -49,17 +102,31 @@ describe("TemplateRenderer", () => {
         ]),
       ),
     } as unknown as IQueryEngine;
+    // A single cast at construction exposes the protected members declared
+    // on the intersection type above. TypeScript forbids assigning a class
+    // instance to an interface where its protected members appear as public,
+    // so the cast cannot be avoided entirely.
     renderer = new TemplateRenderer({
       queryEngine,
       queryBatchWindow: 200,
       queryIdentifierVariable: "query",
-    });
+    }) as unknown as typeof renderer;
   });
 
   afterEach(() => {
     vi.resetAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  describe("constructors defaults", () => {
+    it("applies default options when none are provided", async () => {
+      const defaultRenderer = new TemplateRenderer({}) as unknown as typeof renderer;
+      await expect(defaultRenderer.visualiseTerm(undefined)).resolves.toBe(
+        '<pre class="error">undefined</pre>',
+      );
+      expect(defaultRenderer.findTemplates(dataFactory.namedNode("abc"))).toEqual([]);
+    });
   });
 
   describe("loadTemplates", () => {
@@ -100,7 +167,7 @@ describe("TemplateRenderer", () => {
           [dataFactory.variable("var1"), dataFactory.namedNode("ex:value2")],
         ]),
       ] as unknown as RDF.Bindings[];
-      expect(TemplateRenderer.bindingsToRecords(bindings)).toEqual([
+      expect(statics.bindingsToRecords(bindings)).toEqual([
         { var1: dataFactory.literal("value1") },
         { var1: dataFactory.namedNode("ex:value2") },
       ]);
@@ -118,13 +185,13 @@ describe("TemplateRenderer", () => {
 
   describe("parseOperation", () => {
     it("parses an operation", () => {
-      expect(TemplateRenderer.parseOperation("")).toEqual({ type: "nop" });
+      expect(statics.parseOperation("")).toEqual({ type: "nop" });
     });
   });
 
   describe("serializeOperation", () => {
     it("serializes an operation", () => {
-      expect(TemplateRenderer.serializeOperation(algebraFactory.createNop())).toBe("");
+      expect(statics.serializeOperation(algebraFactory.createNop())).toBe("");
     });
   });
 

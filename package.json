@@ -28,6 +28,7 @@
     "prepack": "yarn run build"
   },
   "dependencies": {
+    "@comunica/query-sparql": "^5.0.0",
     "@comunica/types": "^5.0.0",
     "@rdfjs/types": "^2.0.0",
     "@traqula/algebra-sparql-1-2": "^1.0.0",
