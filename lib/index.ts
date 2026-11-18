@@ -1,3 +1,2 @@
-export * from "./Template";
-export * from "./TemplateContext";
-export * from "./TemplateRenderer";
+export { TemplateRenderer } from "./renderer";
+export type { ITemplateRenderer, ITemplateContext } from "./types";

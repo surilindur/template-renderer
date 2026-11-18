@@ -1,4 +1,4 @@
-import * as RDF from "@rdfjs/types";
+import type * as RDF from "@rdfjs/types";
 import MurmurHash3 from "imurmurhash";
 import { DataFactory } from "rdf-data-factory";
 import { QueryEngine } from "@comunica/query-sparql";
@@ -11,23 +11,13 @@ import { Generator } from "@traqula/generator-sparql-1-2";
 import { Parser } from "@traqula/parser-sparql-1-2";
 import { toAlgebra, toAst } from "@traqula/algebra-sparql-1-2";
 import { Eta, type EtaConfig } from "eta";
-import { ITemplate } from "./Template";
-import type { ITemplateContext } from "./TemplateContext";
-
-type QueryBatch<T> = {
-  query: string;
-  endpoint: string;
-  bindings: IBindings[];
-  resolutions: Record<string, ((value: T) => void)[]>;
-  rejections: Record<string, ((error: unknown) => void)[]>;
-};
-
-type QueryBuffer<T> = Record<string, QueryBatch<T>>;
-
-interface ITemplateRenderer {
-  loadTemplates: (sources: QuerySourceUnidentified[]) => Promise<number>;
-  visualiseTerm: (term: RDF.Term | undefined) => Promise<string>;
-}
+import type {
+  ITemplateRenderer,
+  ITemplateContext,
+  ITemplate,
+  QueryBatch,
+  QueryBuffer,
+} from "./types";
 
 class TemplateRenderer implements ITemplateRenderer {
   protected readonly eta: Eta;
@@ -43,15 +33,21 @@ class TemplateRenderer implements ITemplateRenderer {
   protected readonly batchWindowMilliseconds: number;
   protected readonly queryIdentifierVariable: RDF.Variable;
 
-  protected static readonly sparqlParser = new Parser();
-  protected static readonly sparqlGenerator = new Generator();
+  protected readonly sparqlParser: Parser;
+  protected readonly sparqlGenerator: Generator;
 
   public constructor(options: ITemplateRendererOptions) {
-    this.eta = new Eta(options.etaOptions ?? { useWith: true });
+    this.dataFactory = options.dataFactory ?? new DataFactory();
+    this.algebraFactory = options.algebraFactory ?? new AlgebraFactory(this.dataFactory);
     this.queryEngine = options.queryEngine ?? new QueryEngine();
-    this.endpointFetcher = new SparqlEndpointFetcher(options.sparqlEndpointFetcherOptions);
-    this.dataFactory = new DataFactory();
-    this.algebraFactory = new AlgebraFactory(this.dataFactory);
+    this.sparqlGenerator = options.sparqlGenerator ?? new Generator();
+    this.sparqlParser = options.sparqlParser ?? new Parser();
+    this.eta = new Eta(options.etaOptions ?? { useWith: true });
+    this.endpointFetcher = new SparqlEndpointFetcher({
+      ...options.endpointFetcherOptions,
+      dataFactory: options.endpointFetcherOptions?.dataFactory ?? this.dataFactory,
+      sparqlQueryParser: options.endpointFetcherOptions?.sparqlQueryParser ?? this.sparqlParser,
+    });
     this.templates = new Map();
     this.selectBuffer = {};
     this.askBuffer = {};
@@ -102,7 +98,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
    * @param term The term to find templates for.
    * @returns The templates, sorted by relevance.
    */
-  public findTemplates(term: RDF.Term): ITemplate[] {
+  protected findTemplates(term: RDF.Term): ITemplate[] {
     const templatesWithRelevance: { template: ITemplate; relevance: number }[] = [];
     for (const template of this.templates.values()) {
       const relevance = this.calculateRelevance(template, term);
@@ -125,11 +121,11 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   }
 
   protected parseOperation(op: string): Algebra.Operation {
-    return toAlgebra(TemplateRenderer.sparqlParser.parse(op));
+    return toAlgebra(this.sparqlParser.parse(op));
   }
 
   protected serializeOperation(operation: Algebra.Operation): string {
-    return TemplateRenderer.sparqlGenerator.generate(toAst(operation));
+    return this.sparqlGenerator.generate(toAst(operation));
   }
 
   public async visualiseTerm(term: RDF.Term | undefined): Promise<string> {
@@ -151,12 +147,11 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
         try {
           return await this.eta.renderStringAsync(template.content, templateContext);
         } catch (error: unknown) {
-          const errorString = `${error}`;
-          return `<pre class="error">${encodeURI(errorString)}</pre>`;
+          return `<pre class="error">${error}</pre>`;
         }
       }
     }
-    return `<pre class="error">${encodeURI(JSON.stringify(term, undefined, 2))}</pre>`;
+    return `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
   }
 
   protected bindingsToValues(bindings: IBindings[]): Algebra.Values {
@@ -431,10 +426,26 @@ interface ITemplateRendererOptions {
    */
   queryEngine?: IQueryEngine;
   /**
+   * Optional SPARQL parser to use.
+   */
+  sparqlParser?: Parser;
+  /**
+   * Optional SPARQL generator to use.
+   */
+  sparqlGenerator?: Generator;
+  /**
+   * Optional RDF data factory to use.
+   */
+  dataFactory?: DataFactory;
+  /**
+   * Optional algebra factory to use.
+   */
+  algebraFactory?: AlgebraFactory;
+  /**
    * Optional configuration for the SPARQL endpoint fetcher,
    * that will be used within the templates themselves to exeute SPARQL queries.
    */
-  sparqlEndpointFetcherOptions?: Partial<ISparqlEndpointFetcherArgs>;
+  endpointFetcherOptions?: Partial<ISparqlEndpointFetcherArgs>;
   /**
    * Optional confgiguration for the Eta template engine.
    * Use of with for async is always required.
