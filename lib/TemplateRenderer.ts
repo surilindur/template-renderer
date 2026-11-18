@@ -105,7 +105,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   public findTemplates(term: RDF.Term): ITemplate[] {
     const templatesWithRelevance: { template: ITemplate; relevance: number }[] = [];
     for (const template of this.templates.values()) {
-      const relevance = TemplateRenderer.calculateRelevance(template, term);
+      const relevance = this.calculateRelevance(template, term);
       if (relevance >= 0) {
         templatesWithRelevance.push({ template, relevance });
       }
@@ -119,16 +119,16 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
    * @param term The RDF term to calculate relevance for.
    * @returns The relevance as a numeric value, where higher is more relevant.
    */
-  protected static calculateRelevance(template: ITemplate, term: RDF.Term): number {
+  protected calculateRelevance(template: ITemplate, term: RDF.Term): number {
     const match = template.pattern.exec(term.value);
     return match?.[0].length ?? Number.NEGATIVE_INFINITY;
   }
 
-  protected static parseOperation(op: string): Algebra.Operation {
+  protected parseOperation(op: string): Algebra.Operation {
     return toAlgebra(TemplateRenderer.sparqlParser.parse(op));
   }
 
-  protected static serializeOperation(operation: Algebra.Operation): string {
+  protected serializeOperation(operation: Algebra.Operation): string {
     return TemplateRenderer.sparqlGenerator.generate(toAst(operation));
   }
 
@@ -284,7 +284,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    const askOperation = TemplateRenderer.parseOperation(batch.query);
+    const askOperation = this.parseOperation(batch.query);
 
     const selectOperation = algebraUtils.mapOperation(askOperation, {
       ask: {
@@ -301,7 +301,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     }) as Algebra.Operation;
 
     try {
-      const queryString = TemplateRenderer.serializeOperation(selectOperation);
+      const queryString = this.serializeOperation(selectOperation);
       const bindingsArray = await this.selectAll(queryString, batch.endpoint);
 
       // Report existence to their corresponding queries
@@ -339,7 +339,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    const selectOperationOriginal = TemplateRenderer.parseOperation(batch.query);
+    const selectOperationOriginal = this.parseOperation(batch.query);
 
     const selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
       project: {
@@ -353,7 +353,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     }) as Algebra.Operation;
 
     try {
-      const queryString = TemplateRenderer.serializeOperation(selectOperation);
+      const queryString = this.serializeOperation(selectOperation);
       const bindingsArray = await this.selectAll(queryString, batch.endpoint);
       const bindingsByQuery: Record<string, IBindings[]> = {};
 
