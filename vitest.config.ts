@@ -21,6 +21,8 @@ export default defineConfig({
         perFile: true,
         statements: 100,
       },
+      include: ["lib/*.ts"],
+      exclude: ["lib/index.ts"],
     },
     projects: [
       ...browsers.map((browser) => ({
