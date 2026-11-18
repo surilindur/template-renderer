@@ -2,66 +2,61 @@ import type * as RDF from "@rdfjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArrayIterator } from "asynciterator";
 import { DataFactory } from "rdf-data-factory";
-import type { BindingsStream, IQueryEngine } from "@comunica/types";
+import type { IQueryEngine } from "@comunica/types";
 import type { Algebra } from "@traqula/algebra-transformations-1-2";
 import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
-import type { Eta } from "eta";
-import { ITemplateRenderer, TemplateRenderer, type QueryBuffer } from "../lib/TemplateRenderer";
+import { TemplateRenderer, type QueryBuffer } from "../lib/TemplateRenderer";
 import type { ITemplate } from "../lib/Template";
 import type { ITemplateContext } from "../lib/TemplateContext";
+import type { Eta } from "eta";
+import { IBindings } from "fetch-sparql-endpoint";
 
 describe("TemplateRenderer", () => {
-  let renderer: ITemplateRenderer & {
-    // Non-public members of TemplateRenderer accessed by the tests.
-    // Declaring them here avoids type casts in the test body while keeping
-    // them unexposed in the class itself.
-    templates: Map<string, ITemplate>;
-    findTemplates: (term: RDF.Term) => ITemplate[];
-    eta: Eta;
-    bindingsToValues: (bindings: Record<string, RDF.NamedNode | RDF.Literal>[]) => Algebra.Values;
-    generateQueryIdentifier: (
+  type TestTemplateRenderer = TemplateRenderer & {
+    readonly eta: Eta;
+    calculateRelevance(template: ITemplate, term: RDF.Term): number;
+    parseOperation(op: string): Algebra.Operation;
+    serializeOperation(operation: Algebra.Operation): string;
+    bindingsToValues(bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): Algebra.Values;
+    generateQueryIdentifier(
       query: string,
-      sources: string[],
+      endpoint: string,
       bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-    ) => RDF.NamedNode;
-    generateQueryBatchIdentifier: (
+    ): RDF.NamedNode;
+    generateQueryBatchIdentifier(
       query: string,
-      sources: string[],
+      endpoint: string,
       bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-    ) => RDF.NamedNode;
-    executeBatched: <T>(
+    ): RDF.NamedNode;
+    executeBatched<T>(
       query: string,
-      sources: string[],
+      endpoint: string,
       bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
       buffer: QueryBuffer<T>,
       executor: (batchIdentifier: RDF.NamedNode) => Promise<void>,
-    ) => Promise<T>;
-    selectAll: (query: string, sources: string[]) => Promise<RDF.Bindings[]>;
-    executeAsk: (buffer: QueryBuffer<boolean>, batchIdentifier: RDF.NamedNode) => Promise<void>;
-    executeSelect: (
-      buffer: QueryBuffer<RDF.Bindings[]>,
+    ): Promise<T>;
+    selectAll(query: string, endpoint: string): Promise<Record<string, RDF.Term>[]>;
+    executeAsk(buffer: QueryBuffer<boolean>, batchIdentifier: RDF.NamedNode): Promise<void>;
+    executeSelect(
+      buffer: QueryBuffer<Record<string, RDF.Term>[]>,
       batchIdentifier: RDF.NamedNode,
-    ) => Promise<void>;
-    askBatched: (
+    ): Promise<void>;
+    askBatched(
       query: string,
-      sources: string[],
+      endpoint: string,
       bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-    ) => Promise<boolean>;
-    selectBatched: (
+    ): Promise<boolean>;
+    selectBatched(
       query: string,
-      sources: string[],
+      endpoint: string,
       bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-    ) => Promise<RDF.Bindings[]>;
+    ): Promise<Record<string, RDF.Term>[]>;
+    readonly askBuffer: QueryBuffer<boolean>;
+    readonly selectBuffer: QueryBuffer<Record<string, RDF.Term>[]>;
+    readonly endpointFetcher: { fetchBindings(endpoint: string, query: string): unknown };
   };
 
-  // The protected static members of TemplateRenderer accessed by the tests. A
-  // single cast exposes them as public so they can be called through the class
-  // without a cast at every call site.
-  const statics = TemplateRenderer as unknown as {
-    bindingsToRecords: (bindings: RDF.Bindings[]) => Record<string, RDF.Term>[];
-    parseOperation: (op: string) => Algebra.Operation;
-    serializeOperation: (operation: Algebra.Operation) => string;
-  };
+  let renderer: TestTemplateRenderer;
 
   let queryEngine: IQueryEngine;
 
@@ -102,10 +97,6 @@ describe("TemplateRenderer", () => {
         ]),
       ),
     } as unknown as IQueryEngine;
-    // A single cast at construction exposes the protected members declared
-    // on the intersection type above. TypeScript forbids assigning a class
-    // instance to an interface where its protected members appear as public,
-    // so the cast cannot be avoided entirely.
     renderer = new TemplateRenderer({
       queryEngine,
       queryBatchWindow: 200,
@@ -121,27 +112,35 @@ describe("TemplateRenderer", () => {
 
   describe("constructors defaults", () => {
     it("applies default options when none are provided", async () => {
-      const defaultRenderer = new TemplateRenderer({}) as unknown as typeof renderer;
+      const defaultRenderer = new TemplateRenderer({});
+      // JSON.stringify(undefined) serializes to the string "undefined"
       await expect(defaultRenderer.visualiseTerm(undefined)).resolves.toBe(
-        '<pre class="error">undefined</pre>',
+        `<pre class="error">${encodeURI(JSON.stringify(undefined))}</pre>`,
       );
       expect(defaultRenderer.findTemplates(dataFactory.namedNode("abc"))).toEqual([]);
     });
   });
 
   describe("loadTemplates", () => {
-    it("retrieves templates using the query engine", async () => {
-      await expect(renderer.loadTemplates([])).resolves.not.toThrow();
+    it("retrieves templates using the query engine when sources are given", async () => {
+      await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.toBe(1);
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       const template = renderer.templates.get("urn:template")!;
       expect(template.content).toBe("<p>example</p>");
+    });
+
+    it("returns no templates when no sources are given", async () => {
+      await expect(renderer.loadTemplates([])).resolves.toBe(0);
+      expect(queryEngine.queryBindings).not.toHaveBeenCalled();
     });
 
     it("forwards errors from the query engine", async () => {
       vi.spyOn(queryEngine, "queryBindings").mockRejectedValue(
         new Error("Error from query engine"),
       );
-      await expect(renderer.loadTemplates([])).rejects.toThrow("Error from query engine");
+      await expect(renderer.loadTemplates(["https://localhost/sparql"])).rejects.toThrow(
+        "Error from query engine",
+      );
     });
   });
 
@@ -157,41 +156,44 @@ describe("TemplateRenderer", () => {
     });
   });
 
-  describe("bindingsToRecords", () => {
-    it("converts a bindings array to a record array", () => {
-      const bindings = [
-        new Map<RDF.Variable, RDF.Term>([
-          [dataFactory.variable("var1"), dataFactory.literal("value1")],
-        ]),
-        new Map<RDF.Variable, RDF.Term>([
-          [dataFactory.variable("var1"), dataFactory.namedNode("ex:value2")],
-        ]),
-      ] as unknown as RDF.Bindings[];
-      expect(statics.bindingsToRecords(bindings)).toEqual([
-        { var1: dataFactory.literal("value1") },
-        { var1: dataFactory.namedNode("ex:value2") },
-      ]);
+  describe("calculateRelevance", () => {
+    it("returns the length of the regex match for applicable templates", () => {
+      const template: ITemplate = { content: "content", pattern: /^ab/, target: "urn:target" };
+      expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(2);
+    });
+
+    it("returns negative infinity for inapplicable templates", () => {
+      const template: ITemplate = { content: "content", pattern: /^xyz/, target: "urn:target" };
+      expect(renderer.calculateRelevance(template, dataFactory.namedNode("abc"))).toBe(
+        Number.NEGATIVE_INFINITY,
+      );
     });
   });
 
   describe("bindingsToValues", () => {
-    it("converts bindings array to values clause", () => {
-      const bindings = [{ var1: dataFactory.literal("value1") }];
+    it("converts a bindings array to a values clause using the union of keys", () => {
+      const bindings: IBindings[] = [
+        { var1: dataFactory.literal("value1") },
+        { var2: dataFactory.literal("value2") },
+      ];
       expect(renderer.bindingsToValues(bindings)).toEqual(
-        algebraFactory.createValues([dataFactory.variable("var1")], bindings),
+        algebraFactory.createValues(
+          [dataFactory.variable("var1"), dataFactory.variable("var2")],
+          bindings as Record<string, RDF.Literal | RDF.NamedNode>[],
+        ),
       );
     });
   });
 
   describe("parseOperation", () => {
     it("parses an operation", () => {
-      expect(statics.parseOperation("")).toEqual({ type: "nop" });
+      expect(renderer.parseOperation("")).toEqual({ type: "nop" });
     });
   });
 
   describe("serializeOperation", () => {
     it("serializes an operation", () => {
-      expect(statics.serializeOperation(algebraFactory.createNop())).toBe("");
+      expect(renderer.serializeOperation(algebraFactory.createNop())).toBe("");
     });
   });
 
@@ -199,7 +201,7 @@ describe("TemplateRenderer", () => {
     it("returns direct serialization without applicable templates", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([]);
       await expect(renderer.visualiseTerm({ value: "abc" } as unknown as RDF.Term)).resolves.toBe(
-        '<pre class="error">{\n  "value": "abc"\n}</pre>',
+        `<pre class="error">${encodeURI(JSON.stringify({ value: "abc" }, undefined, 2))}</pre>`,
       );
     });
 
@@ -208,7 +210,7 @@ describe("TemplateRenderer", () => {
         { content: "template content", pattern: /^.*/, target: "urn:target" } as ITemplate,
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
-      vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as RDF.Bindings[]);
+      vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as Record<string, RDF.Term>[]);
       vi.spyOn(renderer.eta, "renderStringAsync").mockImplementation(
         async (template: string, data: object): Promise<string> => {
           const context = data as ITemplateContext;
@@ -236,94 +238,74 @@ describe("TemplateRenderer", () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         { content: "template content", pattern: /^.*/, target: "urn:target" } as ITemplate,
       ]);
-      vi.spyOn(renderer.eta, "renderStringAsync").mockRejectedValue(
-        new Error("Template rendering error"),
-      );
+      const error = new Error("Template rendering error");
+      vi.spyOn(renderer.eta, "renderStringAsync").mockRejectedValue(error);
       await expect(
         renderer.visualiseTerm(dataFactory.namedNode("term to visualise")),
-      ).resolves.toBe('<pre class="error">Error: Template rendering error</pre>');
+      ).resolves.toBe(`<pre class="error">${encodeURI(String(error))}</pre>`);
     });
   });
 
   describe("generateQueryIdentifier", () => {
-    it("returns identical identifiers for identical queries, sources and bindings", () => {
+    it("returns identical identifiers for identical queries, endpoints and bindings", () => {
       const bindings = [
         { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
       ];
-      expect(renderer.generateQueryIdentifier("query1", ["source1"], bindings)).toEqual(
-        renderer.generateQueryIdentifier("query1", ["source1"], bindings),
+      expect(renderer.generateQueryIdentifier("query1", "source1", bindings)).toEqual(
+        renderer.generateQueryIdentifier("query1", "source1", bindings),
       );
     });
 
-    it("returns different identifiers for any difference in query, sources or binding values", () => {
-      const identifier = renderer.generateQueryIdentifier(
-        "query1",
-        ["source1"],
-        [{ var1: dataFactory.literal("value1") }],
+    it("returns different identifiers for any difference in query, endpoint or binding values", () => {
+      const identifier = renderer.generateQueryIdentifier("query1", "source1", [
+        { var1: dataFactory.literal("value1") },
+      ]);
+      expect(identifier).not.toEqual(
+        renderer.generateQueryIdentifier("query2", "source1", [
+          { var1: dataFactory.literal("value1") },
+        ]),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier(
-          "query2",
-          ["source1"],
-          [{ var1: dataFactory.literal("value1") }],
-        ),
+        renderer.generateQueryIdentifier("query1", "source2", [
+          { var1: dataFactory.literal("value1") },
+        ]),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier(
-          "query1",
-          ["source2"],
-          [{ var1: dataFactory.literal("value1") }],
-        ),
-      );
-      expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier(
-          "query1",
-          ["source1"],
-          [{ var1: dataFactory.literal("value2") }],
-        ),
+        renderer.generateQueryIdentifier("query1", "source1", [
+          { var1: dataFactory.literal("value2") },
+        ]),
       );
     });
   });
 
   describe("generateQueryBatchIdentifier", () => {
-    it("returns identical identifiers for identical queries, sources and binding keys", () => {
+    it("returns identical identifiers for identical queries, endpoints and binding keys", () => {
       expect(
-        renderer.generateQueryBatchIdentifier(
-          "query1",
-          ["source1"],
-          [{ var1: dataFactory.literal("value1") }, { var2: dataFactory.literal("value2") }],
-        ),
+        renderer.generateQueryBatchIdentifier("query1", "source1", [
+          { var1: dataFactory.literal("value1") },
+          { var2: dataFactory.literal("value2") },
+        ]),
       ).toEqual(
-        renderer.generateQueryBatchIdentifier(
-          "query1",
-          ["source1"],
-          [
-            { var1: dataFactory.literal("other value") },
-            { var2: dataFactory.literal("other value") },
-          ],
-        ),
+        renderer.generateQueryBatchIdentifier("query1", "source1", [
+          { var1: dataFactory.literal("other value") },
+          { var2: dataFactory.literal("other value") },
+        ]),
       );
     });
 
-    it("returns different identifiers for any difference in query or sources", () => {
-      const identifier = renderer.generateQueryBatchIdentifier(
-        "query1",
-        ["source1"],
-        [{ var1: dataFactory.literal("value1") }],
+    it("returns different identifiers for any difference in query or endpoint", () => {
+      const identifier = renderer.generateQueryBatchIdentifier("query1", "source1", [
+        { var1: dataFactory.literal("value1") },
+      ]);
+      expect(identifier).not.toEqual(
+        renderer.generateQueryBatchIdentifier("query2", "source1", [
+          { var1: dataFactory.literal("value1") },
+        ]),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryBatchIdentifier(
-          "query2",
-          ["source1"],
-          [{ var1: dataFactory.literal("value1") }],
-        ),
-      );
-      expect(identifier).not.toEqual(
-        renderer.generateQueryBatchIdentifier(
-          "query1",
-          ["source2"],
-          [{ var1: dataFactory.literal("value1") }],
-        ),
+        renderer.generateQueryBatchIdentifier("query1", "source2", [
+          { var1: dataFactory.literal("value1") },
+        ]),
       );
     });
   });
@@ -332,31 +314,37 @@ describe("TemplateRenderer", () => {
     it("askBatched and selectBatched execute through their respective buffers", async () => {
       vi.spyOn(renderer, "executeAsk").mockResolvedValue(undefined);
       vi.spyOn(renderer, "executeSelect").mockResolvedValue(undefined);
-      vi.spyOn(renderer, "executeBatched").mockImplementation(
-        (_query, _sources, _bindings, buffer, executor) => {
+      const executeBatched = vi
+        .spyOn(renderer, "executeBatched")
+        .mockImplementation((_query, _endpoint, _bindings, _buffer, executor) => {
           executor(dataFactory.namedNode("urn:batch"));
           return Promise.resolve("result");
-        },
-      );
-      await expect(renderer.askBatched("query", [], [])).resolves.toBe("result");
-      await expect(renderer.selectBatched("query", [], [])).resolves.toBe("result");
-      expect(renderer.executeBatched).toHaveBeenCalledTimes(2);
+        });
+      await expect(renderer.askBatched("query", "urn:endpoint", [])).resolves.toBe("result");
+      await expect(renderer.selectBatched("query", "urn:endpoint", [])).resolves.toBe("result");
+      expect(executeBatched).toHaveBeenCalledTimes(2);
+      // Each batch function must dispatch to its own buffer and executor
+      expect(executeBatched.mock.calls[0][3]).toBe(renderer.askBuffer);
+      expect(executeBatched.mock.calls[1][3]).toBe(renderer.selectBuffer);
       expect(renderer.executeAsk).toHaveBeenCalledOnce();
       expect(renderer.executeSelect).toHaveBeenCalledOnce();
     });
 
     it("selectAll executes a select query and converts the stream to an array", async () => {
-      vi.spyOn(queryEngine, "queryBindings").mockResolvedValue(
-        new ArrayIterator(["bindings1", "bindings2"]) as unknown as BindingsStream,
+      const rows = [{ s: dataFactory.namedNode("ex:s1") }, { s: dataFactory.namedNode("ex:s2") }];
+      vi.spyOn(renderer.endpointFetcher, "fetchBindings").mockResolvedValue(
+        createFakeStream(rows) as unknown as NodeJS.ReadableStream,
       );
-      await expect(renderer.selectAll("query", [])).resolves.toEqual(["bindings1", "bindings2"]);
+      await expect(
+        renderer.selectAll("SELECT ?s WHERE { ?s ?p ?o }", "urn:endpoint"),
+      ).resolves.toEqual(rows);
     });
 
     it("executeBatched groups queries into batches and resolves each query with the batch result", async () => {
       vi.useFakeTimers();
       const buffer: QueryBuffer<boolean> = {};
       const query = "ASK WHERE { ?s ?p ?o }";
-      const sources = ["urn:source1"];
+      const endpoint = "urn:endpoint";
       // Two identical queries (same bindings, in reversed order) and one different
       // one, so the batch contains both a group of duplicate resolutions and a single
       // resolution. Each set has two bindings so identifier sorting is exercised.
@@ -367,7 +355,7 @@ describe("TemplateRenderer", () => {
       ];
       const targetIdentifier = renderer.generateQueryIdentifier(
         query,
-        sources,
+        endpoint,
         bindingSets[2],
       ).value;
       const executor = async (batchIdentifier: RDF.NamedNode) => {
@@ -380,7 +368,7 @@ describe("TemplateRenderer", () => {
         }
       };
       const promises = bindingSets.map((bindings) =>
-        renderer.executeBatched(query, sources, bindings, buffer, executor),
+        renderer.executeBatched(query, endpoint, bindings, buffer, executor),
       );
       vi.runAllTimers();
       await expect(promises[0]).resolves.toBe(false);
@@ -396,17 +384,14 @@ describe("TemplateRenderer", () => {
 
     it("executes a batch of ask queries", async () => {
       vi.spyOn(renderer, "selectAll").mockResolvedValue([
-        new Map<string, RDF.NamedNode>([
-          ["query", queryIdentifier],
-          ["s", dataFactory.namedNode("ex:s")],
-        ]) as unknown as RDF.Bindings,
+        { query: queryIdentifier, s: dataFactory.namedNode("ex:s") },
       ]);
       const resolveMock = vi.fn();
       const buffer: QueryBuffer<boolean> = {
         [batchIdentifier.value]: {
           bindings: [],
+          endpoint: "urn:endpoint",
           query: "ASK WHERE { ?s ?p ?o }",
-          sources: [],
           rejections: {
             [queryIdentifier.value]: [vi.fn()],
             [emptyQueryIdentifier.value]: [vi.fn()],
@@ -423,15 +408,17 @@ describe("TemplateRenderer", () => {
     });
 
     it("forwards errors to all original reject functions", async () => {
+      const queryRejection = vi.fn();
+      const emptyRejection = vi.fn();
       vi.spyOn(renderer, "selectAll").mockRejectedValue(new Error("Query error"));
       const buffer: QueryBuffer<boolean> = {
         [batchIdentifier.value]: {
           bindings: [],
+          endpoint: "urn:endpoint",
           query: "ASK WHERE { ?s ?p ?o }",
-          sources: [],
           rejections: {
-            [queryIdentifier.value]: [vi.fn()],
-            [emptyQueryIdentifier.value]: [vi.fn()],
+            [queryIdentifier.value]: [queryRejection],
+            [emptyQueryIdentifier.value]: [emptyRejection],
           },
           resolutions: {
             [queryIdentifier.value]: [vi.fn()],
@@ -440,6 +427,8 @@ describe("TemplateRenderer", () => {
         },
       };
       await expect(renderer.executeAsk(buffer, batchIdentifier)).rejects.toThrow("Query error");
+      expect(queryRejection).toHaveBeenCalledOnce();
+      expect(emptyRejection).toHaveBeenCalledOnce();
     });
   });
 
@@ -450,21 +439,15 @@ describe("TemplateRenderer", () => {
 
     it("executes a batch of select queries", async () => {
       vi.spyOn(renderer, "selectAll").mockResolvedValue([
-        new Map<string, RDF.NamedNode>([
-          ["query", queryIdentifier],
-          ["s", dataFactory.namedNode("ex:s1")],
-        ]) as unknown as RDF.Bindings,
-        new Map<string, RDF.NamedNode>([
-          ["query", queryIdentifier],
-          ["s", dataFactory.namedNode("ex:s2")],
-        ]) as unknown as RDF.Bindings,
+        { query: queryIdentifier, s: dataFactory.namedNode("ex:s1") },
+        { query: queryIdentifier, s: dataFactory.namedNode("ex:s2") },
       ]);
       const resolveMock = vi.fn();
-      const buffer: QueryBuffer<RDF.Bindings[]> = {
+      const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
         [batchIdentifier.value]: {
           bindings: [],
+          endpoint: "urn:endpoint",
           query: "SELECT ?s WHERE { ?s ?p ?o }",
-          sources: [],
           rejections: {
             [queryIdentifier.value]: [vi.fn()],
             [emptyQueryIdentifier.value]: [vi.fn()],
@@ -476,20 +459,22 @@ describe("TemplateRenderer", () => {
         },
       };
       await expect(renderer.executeSelect(buffer, batchIdentifier)).resolves.not.toThrow();
-      expect(resolveMock).toHaveBeenNthCalledWith(1, [expect.any(Map), expect.any(Map)]);
+      expect(resolveMock).toHaveBeenNthCalledWith(1, [expect.anything(), expect.anything()]);
       expect(resolveMock).toHaveBeenNthCalledWith(2, []);
     });
 
     it("forwards errors to all original reject functions", async () => {
+      const queryRejection = vi.fn();
+      const emptyRejection = vi.fn();
       vi.spyOn(renderer, "selectAll").mockRejectedValue(new Error("Query error"));
-      const buffer: QueryBuffer<RDF.Bindings[]> = {
+      const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
         [batchIdentifier.value]: {
           bindings: [],
+          endpoint: "urn:endpoint",
           query: "SELECT ?s WHERE { ?s ?p ?o }",
-          sources: [],
           rejections: {
-            [queryIdentifier.value]: [vi.fn()],
-            [emptyQueryIdentifier.value]: [vi.fn()],
+            [queryIdentifier.value]: [queryRejection],
+            [emptyQueryIdentifier.value]: [emptyRejection],
           },
           resolutions: {
             [queryIdentifier.value]: [vi.fn()],
@@ -498,6 +483,25 @@ describe("TemplateRenderer", () => {
         },
       };
       await expect(renderer.executeSelect(buffer, batchIdentifier)).rejects.toThrow("Query error");
+      expect(queryRejection).toHaveBeenCalledOnce();
+      expect(emptyRejection).toHaveBeenCalledOnce();
     });
   });
 });
+
+// Minimal stream double for SparqlEndpointFetcher#fetchBindings: the renderer
+// only registers "data", "end" and "error" listeners, so emit synchronously
+// and return `this` to allow the chainable `.on()` calls.
+function createFakeStream(rows: Record<string, RDF.NamedNode>[]) {
+  const stream = {
+    on(event: string, handler: (...args: unknown[]) => void): object {
+      if (event === "data") {
+        rows.forEach((row) => handler(row));
+      } else if (event === "end") {
+        handler();
+      }
+      return stream;
+    },
+  };
+  return stream;
+}
