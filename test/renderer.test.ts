@@ -5,9 +5,8 @@ import { DataFactory } from "rdf-data-factory";
 import type { IQueryEngine } from "@comunica/types";
 import type { Algebra } from "@traqula/algebra-transformations-1-2";
 import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
-import { TemplateRenderer, type QueryBuffer } from "../lib/TemplateRenderer";
-import type { ITemplate } from "../lib/Template";
-import type { ITemplateContext } from "../lib/TemplateContext";
+import { TemplateRenderer } from "../lib/renderer";
+import type { ITemplate, ITemplateContext, QueryBuffer } from "../lib/types";
 import type { Eta } from "eta";
 import { IBindings } from "fetch-sparql-endpoint";
 
@@ -18,6 +17,7 @@ describe("TemplateRenderer", () => {
     parseOperation(op: string): Algebra.Operation;
     serializeOperation(operation: Algebra.Operation): string;
     bindingsToValues(bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): Algebra.Values;
+    findTemplates: (term: RDF.Term) => ITemplate[];
     generateQueryIdentifier(
       query: string,
       endpoint: string,
@@ -112,10 +112,12 @@ describe("TemplateRenderer", () => {
 
   describe("constructors defaults", () => {
     it("applies default options when none are provided", async () => {
-      const defaultRenderer = new TemplateRenderer({});
+      const defaultRenderer: TestTemplateRenderer = new TemplateRenderer(
+        {},
+      ) as unknown as TestTemplateRenderer;
       // JSON.stringify(undefined) serializes to the string "undefined"
       await expect(defaultRenderer.visualiseTerm(undefined)).resolves.toBe(
-        `<pre class="error">${encodeURI(JSON.stringify(undefined))}</pre>`,
+        `<pre class="error">${JSON.stringify(undefined)}</pre>`,
       );
       expect(defaultRenderer.findTemplates(dataFactory.namedNode("abc"))).toEqual([]);
     });
@@ -201,7 +203,7 @@ describe("TemplateRenderer", () => {
     it("returns direct serialization without applicable templates", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([]);
       await expect(renderer.visualiseTerm({ value: "abc" } as unknown as RDF.Term)).resolves.toBe(
-        `<pre class="error">${encodeURI(JSON.stringify({ value: "abc" }, undefined, 2))}</pre>`,
+        `<pre class="error">${JSON.stringify({ value: "abc" }, undefined, 2)}</pre>`,
       );
     });
 
@@ -242,7 +244,7 @@ describe("TemplateRenderer", () => {
       vi.spyOn(renderer.eta, "renderStringAsync").mockRejectedValue(error);
       await expect(
         renderer.visualiseTerm(dataFactory.namedNode("term to visualise")),
-      ).resolves.toBe(`<pre class="error">${encodeURI(String(error))}</pre>`);
+      ).resolves.toBe(`<pre class="error">${String(error)}</pre>`);
     });
   });
 
