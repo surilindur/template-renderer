@@ -36,6 +36,7 @@
     "@traqula/generator-sparql-1-2": "^1.0.0",
     "@traqula/parser-sparql-1-2": "^1.0.0",
     "eta": "^4.0.0",
+    "fetch-sparql-endpoint": "^7.0.0",
     "imurmurhash": "^0.1.0",
     "rdf-data-factory": "^2.0.0"
   },

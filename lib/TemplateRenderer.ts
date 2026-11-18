@@ -1,8 +1,10 @@
-import type * as RDF from "@rdfjs/types";
+import * as RDF from "@rdfjs/types";
 import MurmurHash3 from "imurmurhash";
 import { DataFactory } from "rdf-data-factory";
-import type { IQueryEngine } from "@comunica/types";
 import { QueryEngine } from "@comunica/query-sparql";
+import type { IQueryEngine, QuerySourceUnidentified } from "@comunica/types";
+import { SparqlEndpointFetcher } from "fetch-sparql-endpoint";
+import type { ISparqlEndpointFetcherArgs, IBindings } from "fetch-sparql-endpoint";
 import type { Algebra } from "@traqula/algebra-transformations-1-2";
 import { AlgebraFactory, algebraUtils } from "@traqula/algebra-transformations-1-2";
 import { Generator } from "@traqula/generator-sparql-1-2";
@@ -14,8 +16,8 @@ import type { ITemplateContext } from "./TemplateContext";
 
 type QueryBatch<T> = {
   query: string;
-  sources: string[];
-  bindings: Record<string, RDF.NamedNode | RDF.Literal>[];
+  endpoint: string;
+  bindings: IBindings[];
   resolutions: Record<string, ((value: T) => void)[]>;
   rejections: Record<string, ((error: unknown) => void)[]>;
 };
@@ -23,19 +25,20 @@ type QueryBatch<T> = {
 type QueryBuffer<T> = Record<string, QueryBatch<T>>;
 
 interface ITemplateRenderer {
-  loadTemplates: (sources: string[]) => Promise<number>;
+  loadTemplates: (sources: QuerySourceUnidentified[]) => Promise<number>;
   visualiseTerm: (term: RDF.Term | undefined) => Promise<string>;
 }
 
 class TemplateRenderer implements ITemplateRenderer {
   protected readonly eta: Eta;
   protected readonly queryEngine: IQueryEngine;
+  protected readonly endpointFetcher: SparqlEndpointFetcher;
   protected readonly dataFactory: DataFactory;
   protected readonly algebraFactory: AlgebraFactory;
 
   public readonly templates: Map<string, ITemplate>;
 
-  protected readonly selectBuffer: QueryBuffer<RDF.Bindings[]>;
+  protected readonly selectBuffer: QueryBuffer<IBindings[]>;
   protected readonly askBuffer: QueryBuffer<boolean>;
   protected readonly batchWindowMilliseconds: number;
   protected readonly queryIdentifierVariable: RDF.Variable;
@@ -46,6 +49,7 @@ class TemplateRenderer implements ITemplateRenderer {
   public constructor(options: ITemplateRendererOptions) {
     this.eta = new Eta(options.etaOptions ?? { useWith: true });
     this.queryEngine = options.queryEngine ?? new QueryEngine();
+    this.endpointFetcher = new SparqlEndpointFetcher(options.sparqlEndpointFetcherOptions);
     this.dataFactory = new DataFactory();
     this.algebraFactory = new AlgebraFactory(this.dataFactory);
     this.templates = new Map();
@@ -58,34 +62,36 @@ class TemplateRenderer implements ITemplateRenderer {
   }
 
   /**
-   * Collects all templates from the specified sources.
-   * @param sources The sources to query.
+   * Collects all templates from the specified SPARQL endpoint.
+   * @param endpoint The SPARQL endpoint to query.
    * @returns The number of templates discovered.
    */
-  public async loadTemplates(sources: string[]): Promise<number> {
+  public async loadTemplates(sources: QuerySourceUnidentified[]): Promise<number> {
     this.templates.clear();
-    const templateQuery = `PREFIX schema: <https://schema.org/>
+    if (sources.length > 0) {
+      const templateQuery = `PREFIX schema: <https://schema.org/>
 
 SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
-    ?template a schema:SoftwareSourceCode .
-    ?template schema:codeSampleType ?type .
-    ?template schema:text ?text .
-    ?template schema:pattern ?pattern .
-    ?template schema:target ?target .
+  ?template a schema:SoftwareSourceCode .
+  ?template schema:codeSampleType ?type .
+  ?template schema:text ?text .
+  ?template schema:pattern ?pattern .
+  ?template schema:target ?target .
 
-    OPTIONAL { ?template schema:order ?order . }
+  OPTIONAL { ?template schema:order ?order . }
 
-    BIND(COALESCE(?order, 0) AS ?priority)
+  BIND(COALESCE(?order, 0) AS ?priority)
 } ORDER BY DESC(?priority)`;
-    const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
-    for await (const bindings of bindingsStream) {
-      const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
-      if (!this.templates.has(template)) {
-        this.templates.set(template, {
-          content: (bindings.get("text") as RDF.Literal).value,
-          pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
-          target: (bindings.get("target") as RDF.NamedNode).value,
-        });
+      const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
+      for await (const bindings of bindingsStream) {
+        const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
+        if (!this.templates.has(template)) {
+          this.templates.set(template, {
+            content: (bindings.get("text") as RDF.Literal).value,
+            pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
+            target: (bindings.get("target") as RDF.NamedNode).value,
+          });
+        }
       }
     }
     return this.templates.size;
@@ -132,24 +138,13 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
       if (template) {
         const templateContext: ITemplateContext = {
           term,
-          queryAsk: (query, bindings) => this.askBatched(query, [template.target], bindings ?? []),
+          queryAsk: (query, bindings) => this.askBatched(query, template.target, bindings ?? []),
           querySelect: async (query, bindings) => {
-            const outputBindings = await this.selectBatched(
-              query,
-              [template.target],
-              bindings ?? [],
-            );
-            const outputRecords = TemplateRenderer.bindingsToRecords(outputBindings);
-            return outputRecords.at(0);
+            const outputBindings = await this.selectBatched(query, template.target, bindings ?? []);
+            return outputBindings.at(0);
           },
           querySelectAll: async (query, bindings) => {
-            const outputBindings = await this.selectBatched(
-              query,
-              [template.target],
-              bindings ?? [],
-            );
-            const outputRecords = TemplateRenderer.bindingsToRecords(outputBindings);
-            return outputRecords;
+            return await this.selectBatched(query, template.target, bindings ?? []);
           },
           visualiseTerm: (term) => this.visualiseTerm(term),
         };
@@ -164,26 +159,12 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     return `<pre class="error">${encodeURI(JSON.stringify(term, undefined, 2))}</pre>`;
   }
 
-  protected static bindingsToRecords(bindings: RDF.Bindings[]): Record<string, RDF.Term>[] {
-    const output: Record<string, RDF.Term>[] = [];
-    for (const mapping of bindings) {
-      const record: Record<string, RDF.Term> = {};
-      for (const [key, value] of mapping) {
-        record[key.value] = value;
-      }
-      output.push(record);
-    }
-    return output;
-  }
-
-  protected bindingsToValues(
-    bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-  ): Algebra.Values {
+  protected bindingsToValues(bindings: IBindings[]): Algebra.Values {
     return this.algebraFactory.createValues(
       [...new Set(bindings.flatMap((b) => Object.keys(b)))].map((s) =>
         this.dataFactory.variable(s),
       ),
-      bindings,
+      bindings as Record<string, RDF.NamedNode | RDF.Literal>[],
     );
   }
 
@@ -195,12 +176,12 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
    */
   protected generateQueryIdentifier(
     query: string,
-    sources: string[],
+    endpoint: string,
     bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
   ): RDF.NamedNode {
     const value = JSON.stringify({
       query,
-      sources: [...sources].sort(),
+      endpoint,
       // Ensure the binding objects always sorted identically
       bindings: bindings
         .map((b) =>
@@ -220,12 +201,12 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
    */
   protected generateQueryBatchIdentifier(
     query: string,
-    sources: string[],
+    endpoint: string,
     bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
   ): RDF.NamedNode {
     const value = JSON.stringify({
       query,
-      sources: [...sources].sort(),
+      endpoint,
       bindings: [...new Set(bindings.flatMap((b) => Object.keys(b)))].sort(),
     });
     const hash = MurmurHash3(value).result().toString(16);
@@ -237,13 +218,13 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
    */
   protected async executeBatched<T>(
     query: string,
-    sources: string[],
+    endpoint: string,
     bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
     buffer: QueryBuffer<T>,
     executor: (batchIdentifier: RDF.NamedNode) => Promise<void>,
   ): Promise<T> {
-    const queryIdentifier = this.generateQueryIdentifier(query, sources, bindings);
-    const batchIdentifier = this.generateQueryBatchIdentifier(query, sources, bindings);
+    const queryIdentifier = this.generateQueryIdentifier(query, endpoint, bindings);
+    const batchIdentifier = this.generateQueryBatchIdentifier(query, endpoint, bindings);
 
     // Add the current query identifier to the bindings
     bindings = bindings.map((b) => ({
@@ -267,7 +248,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
       } else {
         buffer[batchIdentifier.value] = {
           query,
-          sources,
+          endpoint,
           bindings,
           resolutions: { [queryIdentifier.value]: [resolve] },
           rejections: { [queryIdentifier.value]: [reject] },
@@ -277,9 +258,23 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     });
   }
 
-  protected async selectAll(query: string, sources: string[]): Promise<RDF.Bindings[]> {
-    const bindingsStream = await this.queryEngine.queryBindings(query, { sources, lenient: true });
-    return bindingsStream.toArray();
+  protected async selectAll(query: string, endpoint: string): Promise<IBindings[]> {
+    return new Promise<IBindings[]>((resolve, reject) => {
+      const output: IBindings[] = [];
+      this.endpointFetcher
+        .fetchBindings(endpoint, query)
+        .then((bindingsStream) => {
+          bindingsStream
+            .on("data", (bindings: IBindings) => {
+              output.push(bindings);
+            })
+            .on("end", () => {
+              resolve(output);
+            })
+            .on("error", reject);
+        })
+        .catch(reject);
+    });
   }
 
   protected async executeAsk(
@@ -307,11 +302,11 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
     try {
       const queryString = TemplateRenderer.serializeOperation(selectOperation);
-      const bindingsArray = await this.selectAll(queryString, batch.sources);
+      const bindingsArray = await this.selectAll(queryString, batch.endpoint);
 
       // Report existence to their corresponding queries
       for (const bindings of bindingsArray) {
-        const queryIdentifier = (bindings.get(this.queryIdentifierVariable.value) as RDF.NamedNode)
+        const queryIdentifier = (bindings[this.queryIdentifierVariable.value] as RDF.NamedNode)
           .value;
         for (const resolution of batch.resolutions[queryIdentifier]) {
           resolution(true);
@@ -338,7 +333,7 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   }
 
   protected async executeSelect(
-    buffer: QueryBuffer<RDF.Bindings[]>,
+    buffer: QueryBuffer<IBindings[]>,
     batchIdentifier: RDF.NamedNode,
   ): Promise<void> {
     const batch = buffer[batchIdentifier.value];
@@ -359,11 +354,11 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
     try {
       const queryString = TemplateRenderer.serializeOperation(selectOperation);
-      const bindingsArray = await this.selectAll(queryString, batch.sources);
-      const bindingsByQuery: Record<string, RDF.Bindings[]> = {};
+      const bindingsArray = await this.selectAll(queryString, batch.endpoint);
+      const bindingsByQuery: Record<string, IBindings[]> = {};
 
       for (const bindings of bindingsArray) {
-        const queryIdentifier = (bindings.get(this.queryIdentifierVariable.value) as RDF.NamedNode)
+        const queryIdentifier = (bindings[this.queryIdentifierVariable.value] as RDF.NamedNode)
           .value;
         if (bindingsByQuery[queryIdentifier]) {
           bindingsByQuery[queryIdentifier].push(bindings);
@@ -400,35 +395,26 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
   protected async askBatched(
     query: string,
-    sources: string[],
+    endpoint: string,
     bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
   ): Promise<boolean> {
-    return this.executeBatched<boolean>(query, sources, bindings, this.askBuffer, (batch) =>
+    return this.executeBatched<boolean>(query, endpoint, bindings, this.askBuffer, (batch) =>
       this.executeAsk(this.askBuffer, batch),
     );
   }
 
   protected async selectBatched(
     query: string,
-    sources: string[],
+    endpoint: string,
     bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-  ): Promise<RDF.Bindings[]> {
-    return this.executeBatched<RDF.Bindings[]>(
-      query,
-      sources,
-      bindings,
-      this.selectBuffer,
-      (batch) => this.executeSelect(this.selectBuffer, batch),
+  ): Promise<IBindings[]> {
+    return this.executeBatched<IBindings[]>(query, endpoint, bindings, this.selectBuffer, (batch) =>
+      this.executeSelect(this.selectBuffer, batch),
     );
   }
 }
 
 interface ITemplateRendererOptions {
-  /**
-   * The query engine to use for template retrieval, as well as
-   * the queries within the templates themselves.
-   */
-  queryEngine?: IQueryEngine;
   /**
    * The window in milliseconds for every query batch.
    */
@@ -439,6 +425,16 @@ interface ITemplateRendererOptions {
    * with existing variables in queries, including the queries within templates.
    */
   queryIdentifierVariable?: string;
+  /**
+   * Oprional query engine instance to use for retrieving templates.
+   * When omitted, a default engine instance will be created.
+   */
+  queryEngine?: IQueryEngine;
+  /**
+   * Optional configuration for the SPARQL endpoint fetcher,
+   * that will be used within the templates themselves to exeute SPARQL queries.
+   */
+  sparqlEndpointFetcherOptions?: Partial<ISparqlEndpointFetcherArgs>;
   /**
    * Optional confgiguration for the Eta template engine.
    * Use of with for async is always required.
