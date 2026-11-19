@@ -428,9 +428,35 @@ describe("TemplateRenderer", () => {
           },
         },
       };
-      await expect(renderer.executeAsk(buffer, batchIdentifier)).rejects.toThrow("Query error");
-      expect(queryRejection).toHaveBeenCalledOnce();
-      expect(emptyRejection).toHaveBeenCalledOnce();
+      await expect(renderer.executeAsk(buffer, batchIdentifier)).resolves.not.toThrow();
+      expect(queryRejection).toHaveBeenCalledWith(new Error("Query error"));
+      expect(emptyRejection).toHaveBeenCalledWith(new Error("Query error"));
+    });
+
+    it("forwards parse errors to all original reject functions", async () => {
+      const queryRejection = vi.fn();
+      const emptyRejection = vi.fn();
+      vi.spyOn(renderer, "parseOperation").mockImplementation(() => {
+        throw new Error("Parse error");
+      });
+      const buffer: QueryBuffer<boolean> = {
+        [batchIdentifier.value]: {
+          bindings: [],
+          endpoint: "urn:endpoint",
+          query: "ASK WHERE { ?s ?p ?o }",
+          rejections: {
+            [queryIdentifier.value]: [queryRejection],
+            [emptyQueryIdentifier.value]: [emptyRejection],
+          },
+          resolutions: {
+            [queryIdentifier.value]: [vi.fn()],
+            [emptyQueryIdentifier.value]: [vi.fn()],
+          },
+        },
+      };
+      await expect(renderer.executeAsk(buffer, batchIdentifier)).resolves.not.toThrow();
+      expect(queryRejection).toHaveBeenCalledWith(new Error("Parse error"));
+      expect(emptyRejection).toHaveBeenCalledWith(new Error("Parse error"));
     });
   });
 
@@ -484,9 +510,35 @@ describe("TemplateRenderer", () => {
           },
         },
       };
-      await expect(renderer.executeSelect(buffer, batchIdentifier)).rejects.toThrow("Query error");
-      expect(queryRejection).toHaveBeenCalledOnce();
-      expect(emptyRejection).toHaveBeenCalledOnce();
+      await expect(renderer.executeSelect(buffer, batchIdentifier)).resolves.not.toThrow();
+      expect(queryRejection).toHaveBeenCalledWith(new Error("Query error"));
+      expect(emptyRejection).toHaveBeenCalledWith(new Error("Query error"));
+    });
+
+    it("forwards parse errors to all original reject functions", async () => {
+      const queryRejection = vi.fn();
+      const emptyRejection = vi.fn();
+      vi.spyOn(renderer, "parseOperation").mockImplementation(() => {
+        throw new Error("Parse error");
+      });
+      const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
+        [batchIdentifier.value]: {
+          bindings: [],
+          endpoint: "urn:endpoint",
+          query: "SELECT ?s WHERE { ?s ?p ?o }",
+          rejections: {
+            [queryIdentifier.value]: [queryRejection],
+            [emptyQueryIdentifier.value]: [emptyRejection],
+          },
+          resolutions: {
+            [queryIdentifier.value]: [vi.fn()],
+            [emptyQueryIdentifier.value]: [vi.fn()],
+          },
+        },
+      };
+      await expect(renderer.executeSelect(buffer, batchIdentifier)).resolves.not.toThrow();
+      expect(queryRejection).toHaveBeenCalledWith(new Error("Parse error"));
+      expect(emptyRejection).toHaveBeenCalledWith(new Error("Parse error"));
     });
   });
 });

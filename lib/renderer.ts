@@ -229,16 +229,17 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
 
     return new Promise<T>((resolve, reject) => {
       if (buffer[batchIdentifier.value]) {
-        if (
-          buffer[batchIdentifier.value].resolutions[queryIdentifier.value] &&
-          buffer[batchIdentifier.value].rejections[queryIdentifier.value]
-        ) {
-          buffer[batchIdentifier.value].resolutions[queryIdentifier.value].push(resolve);
-          buffer[batchIdentifier.value].rejections[queryIdentifier.value].push(reject);
+        const batch = buffer[batchIdentifier.value];
+        if (batch.resolutions[queryIdentifier.value]) {
+          batch.resolutions[queryIdentifier.value].push(resolve);
+          batch.rejections[queryIdentifier.value].push(reject);
         } else {
-          buffer[batchIdentifier.value].bindings.push(...bindings);
-          buffer[batchIdentifier.value].resolutions[queryIdentifier.value] = [resolve];
-          buffer[batchIdentifier.value].rejections[queryIdentifier.value] = [reject];
+          // When an identical query has not been included in the batch yet, that is,
+          // the bindings are different, and thus the query identifier is different,
+          // the bindings must be added into tbe batch.
+          batch.bindings.push(...bindings);
+          batch.resolutions[queryIdentifier.value] = [resolve];
+          batch.rejections[queryIdentifier.value] = [reject];
         }
       } else {
         buffer[batchIdentifier.value] = {
@@ -279,21 +280,32 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    const askOperation = this.parseOperation(batch.query);
+    let selectOperation: Algebra.Operation;
+    try {
+      const askOperation = this.parseOperation(batch.query);
 
-    const selectOperation = algebraUtils.mapOperation(askOperation, {
-      ask: {
-        preVisitor: () => ({ shortcut: true, copy: false }),
-        transform: (_, op) =>
-          this.algebraFactory.createProject(
-            this.algebraFactory.createFilter(
-              this.bindingsToValues(batch.bindings),
-              this.algebraFactory.createExistenceExpression(false, op.input),
+      selectOperation = algebraUtils.mapOperation(askOperation, {
+        ask: {
+          preVisitor: () => ({ shortcut: true, copy: false }),
+          transform: (_, op) =>
+            this.algebraFactory.createProject(
+              this.algebraFactory.createFilter(
+                this.bindingsToValues(batch.bindings),
+                this.algebraFactory.createExistenceExpression(false, op.input),
+              ),
+              [this.queryIdentifierVariable],
             ),
-            [this.queryIdentifierVariable],
-          ),
-      },
-    }) as Algebra.Operation;
+        },
+      }) as Algebra.Operation;
+    } catch (error: unknown) {
+      // Send the error to all queries
+      for (const rejections of Object.values(batch.rejections)) {
+        for (const rejection of rejections) {
+          rejection(error);
+        }
+      }
+      return;
+    }
 
     try {
       const queryString = this.serializeOperation(selectOperation);
@@ -322,8 +334,6 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
           rejection(error);
         }
       }
-      // Raise the error so it gets propagated
-      throw error;
     }
   }
 
@@ -334,18 +344,29 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    const selectOperationOriginal = this.parseOperation(batch.query);
+    let selectOperation: Algebra.Operation;
+    try {
+      const selectOperationOriginal = this.parseOperation(batch.query);
 
-    const selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
-      project: {
-        preVisitor: () => ({ shortcut: true, copy: false }),
-        transform: (_copy, op) =>
-          this.algebraFactory.createProject(
-            this.algebraFactory.createJoin([op.input, this.bindingsToValues(batch.bindings)]),
-            [...op.variables, this.queryIdentifierVariable],
-          ),
-      },
-    }) as Algebra.Operation;
+      selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
+        project: {
+          preVisitor: () => ({ shortcut: true, copy: false }),
+          transform: (_copy, op) =>
+            this.algebraFactory.createProject(
+              this.algebraFactory.createJoin([op.input, this.bindingsToValues(batch.bindings)]),
+              [...op.variables, this.queryIdentifierVariable],
+            ),
+        },
+      }) as Algebra.Operation;
+    } catch (error: unknown) {
+      // Send the error to all queries
+      for (const rejections of Object.values(batch.rejections)) {
+        for (const rejection of rejections) {
+          rejection(error);
+        }
+      }
+      return;
+    }
 
     try {
       const queryString = this.serializeOperation(selectOperation);
@@ -383,8 +404,6 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
           rejection(error);
         }
       }
-      // Raise the error so it gets propagated
-      throw error;
     }
   }
 
