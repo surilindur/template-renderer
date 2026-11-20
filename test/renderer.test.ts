@@ -144,6 +144,23 @@ describe("TemplateRenderer", () => {
         "Error from query engine",
       );
     });
+
+    it("stops loading templates when the abort signal fires", async () => {
+      const controller = new AbortController();
+      const bindingsStream = {
+        [Symbol.asyncIterator]: function* (): IterableIterator<RDF.Bindings> {},
+        destroy: vi.fn(),
+      };
+      vi.spyOn(queryEngine, "queryBindings").mockResolvedValue(
+        bindingsStream as unknown as AsyncIterable<Record<string, RDF.Term>>,
+      );
+      const promise = renderer.loadTemplates(["https://localhost/sparql"], controller.signal);
+      // The abort listener is registered after the query engine resolves its stream
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      controller.abort();
+      expect(bindingsStream.destroy).toHaveBeenCalledOnce();
+      await expect(promise).resolves.toBe(0);
+    });
   });
 
   describe("findTemplates", () => {
