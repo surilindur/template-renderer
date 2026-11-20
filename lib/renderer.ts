@@ -60,9 +60,13 @@ class TemplateRenderer implements ITemplateRenderer {
   /**
    * Collects all templates from the specified SPARQL endpoint.
    * @param endpoint The SPARQL endpoint to query.
+   * @param signal Optional signal to stop template loading.
    * @returns The number of templates discovered.
    */
-  public async loadTemplates(sources: QuerySourceUnidentified[]): Promise<number> {
+  public async loadTemplates(
+    sources: QuerySourceUnidentified[],
+    signal?: AbortSignal,
+  ): Promise<number> {
     this.templates.clear();
     if (sources.length > 0) {
       const templateQuery = `PREFIX schema: <https://schema.org/>
@@ -79,6 +83,8 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
   BIND(COALESCE(?order, 0) AS ?priority)
 } ORDER BY DESC(?priority)`;
       const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
+      // Allows terminating the loading of templates
+      signal?.addEventListener("abort", () => bindingsStream.destroy());
       for await (const bindings of bindingsStream) {
         const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
         if (!this.templates.has(template)) {
