@@ -88,8 +88,8 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
         if (!this.templates.has(template)) {
           this.templates.set(template, {
             content: (bindings.get("text") as RDF.Literal).value,
-            pattern: new RegExp((bindings.get("endpoint") as RDF.Literal).value, "u"),
-            endpoint: (bindings.get("target") as RDF.NamedNode).value,
+            pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
+            endpoint: (bindings.get("endpoint") as RDF.NamedNode).value,
             target:
               (bindings.get("target") as RDF.NamedNode).value ===
               "http://www.w3.org/2000/01/rdf-schema#Literal"

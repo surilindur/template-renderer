@@ -149,15 +149,15 @@ describe("TemplateRenderer", () => {
       const template = renderer.templates.get("urn:template")!;
       expect(template.content).toBe("<p>example</p>");
       // The rdfs#Literal target maps to the "Literal" target type,
-      // and its named-node value becomes the endpoint URI.
+      // and the pattern is built from the pattern binding.
       expect(template.target).toBe("Literal");
-      expect(template.endpoint).toBe("http://www.w3.org/2000/01/rdf-schema#Literal");
-      // The pattern is built from the endpoint binding literal.
-      expect(template.pattern.source).toBe("urn:endpoint");
+      expect(template.pattern.source).toBe(".*");
+      // The endpoint comes from the value of the endpoint binding.
+      expect(template.endpoint).toBe("urn:endpoint");
       // Any other target maps to the "NamedNode" target type.
       const otherTemplate = renderer.templates.get("urn:other")!;
       expect(otherTemplate.target).toBe("NamedNode");
-      expect(otherTemplate.endpoint).toBe("http://www.w3.org/2000/01/rdf-schema#Class");
+      expect(otherTemplate.endpoint).toBe("urn:endpoint");
       // Lower-priority duplicates are ignored.
       expect(renderer.templates.size).toBe(2);
     });
