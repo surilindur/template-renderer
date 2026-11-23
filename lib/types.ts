@@ -78,19 +78,22 @@ interface ITemplateContext {
 
 interface ITemplate {
   /**
-   * The pattern, that the term value must match, for this template to be used.
+   * The regular expression that the term value must match.
+   * The length of the match will be the relevance of the template.
    */
   pattern: RegExp;
   /**
-   * The content of the template, in EJS/ETA template language.
+   * The content of the template, in EJS/Eta template language.
    */
   content: string;
   /**
-   * The endpoint against which all queries issues by this template are evaluated.
+   * The URI of the SPARQL endpoint that will handle all queries issued
+   * from within the template using one of the query methods.
    */
   endpoint: string;
   /**
    * The type of RDF term this template can be applied to.
+   * This helps avoid running named node templates on literals, for example.
    */
   target: RDF.NamedNode["termType"] | RDF.Literal["termType"];
 }
