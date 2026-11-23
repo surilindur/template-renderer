@@ -18,14 +18,23 @@ interface ITemplateRenderer {
    * @param sources The sources to query for templates.
    * @returns The number of templates loaded.
    */
-  loadTemplates: (sources: QuerySourceUnidentified[]) => Promise<number>;
+  loadTemplates: (sources: QuerySourceUnidentified[]) => Promise<void>;
   /**
    * Visualise the given RDF term using the loaded templates.
+   * This method selects the first appropriate template and uses only that.
    * This is an unsafe operation: the HTML output is not escaped.
    * @param term The term to visualise.
    * @returns The HTML content of the visualisation.
    */
-  visualiseTerm: (term: RDF.Term | undefined) => Promise<string>;
+  render: (term: RDF.Term | undefined) => Promise<string>;
+  /**
+   * Visualise the given RDF term using the loaded templates.
+   * This method renders all appropriate templates.
+   * This is an unsafe operation: the HTML output is not escaped.
+   * @param term The term to visualise.
+   * @returns The HTML content of the visualisation.
+   */
+  renderAll: (term: RDF.Term | undefined) => Promise<string[]>;
 }
 
 /**
@@ -69,21 +78,24 @@ interface ITemplateContext {
 
 interface ITemplate {
   /**
-   * The pattern, that the term value must match, for this template to be used.
+   * The regular expression that the term value must match.
+   * The length of the match will be the relevance of the template.
    */
   pattern: RegExp;
   /**
-   * The content of the template, in EJS/ETA template language.
+   * The content of the template, in EJS/Eta template language.
    */
   content: string;
   /**
-   * The target against which all queries issues by this template are evaluated.
+   * The URI of the SPARQL endpoint that will handle all queries issued
+   * from within the template using one of the query methods.
    */
-  target: string;
+  endpoint: string;
   /**
    * The type of RDF term this template can be applied to.
+   * This helps avoid running named node templates on literals, for example.
    */
-  type: RDF.NamedNode["termType"] | RDF.Literal["termType"];
+  target: RDF.NamedNode["termType"] | RDF.Literal["termType"];
 }
 
 export type { QueryBatch, QueryBuffer, ITemplateRenderer, ITemplateContext, ITemplate };

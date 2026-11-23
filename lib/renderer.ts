@@ -66,39 +66,31 @@ class TemplateRenderer implements ITemplateRenderer {
   public async loadTemplates(
     sources: QuerySourceUnidentified[],
     signal?: AbortSignal,
-  ): Promise<number> {
+  ): Promise<void> {
     this.templates.clear();
-    if (sources.length > 0) {
-      const bindingsStream = await this.queryEngine.queryBindings(
-        `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    const query = `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX schema: <https://schema.org/>
 
-SELECT DISTINCT ?template ?priority ?text ?keyword ?pattern ?target WHERE {
+SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
   ?template a schema:SoftwareSourceCode .
-  ?template schema:codeSampleType ?type .
-  ?template schema:text ?text .
-  ?template schema:keywords ?keyword .
-  ?template schema:pattern ?pattern .
+  ?template schema:programmingLanguage "Eta" .
   ?template schema:target ?target .
-
-  OPTIONAL { ?template schema:order ?order . }
-
-  BIND(COALESCE(?order, 0) AS ?priority)
-} ORDER BY DESC(?priority)`,
-        {
-          sources,
-        },
-      );
-      // Allows terminating the loading of templates
+  ?template schema:targetProduct ?endpoint .
+  ?template schema:pattern ?pattern .
+  ?template schema:text ?text .
+  ?template schema:position ?priority .
+} ORDER BY DESC(?priority)`;
+    if (sources.length > 0) {
+      const bindingsStream = await this.queryEngine.queryBindings(query, { sources });
       signal?.addEventListener("abort", () => bindingsStream.destroy());
       for await (const bindings of bindingsStream) {
         const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
         if (!this.templates.has(template)) {
           this.templates.set(template, {
             content: (bindings.get("text") as RDF.Literal).value,
-            pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
-            target: (bindings.get("target") as RDF.NamedNode).value,
-            type:
+            pattern: new RegExp((bindings.get("endpoint") as RDF.Literal).value, "u"),
+            endpoint: (bindings.get("target") as RDF.NamedNode).value,
+            target:
               (bindings.get("keyword") as RDF.NamedNode).value ===
               "http://www.w3.org/2000/01/rdf-schema#Literal"
                 ? "Literal"
@@ -107,7 +99,6 @@ SELECT DISTINCT ?template ?priority ?text ?keyword ?pattern ?target WHERE {
         }
       }
     }
-    return this.templates.size;
   }
 
   /**
@@ -133,7 +124,7 @@ SELECT DISTINCT ?template ?priority ?text ?keyword ?pattern ?target WHERE {
    * @returns The relevance as a numeric value, where higher is more relevant.
    */
   protected calculateRelevance(template: ITemplate, term: RDF.Term): number {
-    if (term.termType === template.type) {
+    if (term.termType === template.target) {
       const match = template.pattern.exec(term.value);
       if (match) {
         return match[0].length;
@@ -150,30 +141,53 @@ SELECT DISTINCT ?template ?priority ?text ?keyword ?pattern ?target WHERE {
     return this.sparqlGenerator.generate(toAst(operation));
   }
 
-  public async visualiseTerm(term: RDF.Term | undefined): Promise<string> {
+  protected generateTemplateContext(term: RDF.Term, target: string): ITemplateContext {
+    return {
+      term,
+      queryAsk: (query, bindings) => this.askBatched(query, target, bindings ?? []),
+      querySelect: async (query, bindings) => {
+        const outputBindings = await this.selectBatched(query, target, bindings ?? []);
+        return outputBindings.at(0);
+      },
+      querySelectAll: async (query, bindings) => {
+        return await this.selectBatched(query, target, bindings ?? []);
+      },
+      visualiseTerm: (term) => this.render(term),
+    };
+  }
+
+  public async render(term: RDF.Term | undefined): Promise<string> {
     if (term) {
       const template = this.findTemplates(term).at(0);
       if (template) {
-        const templateContext: ITemplateContext = {
-          term,
-          queryAsk: (query, bindings) => this.askBatched(query, template.target, bindings ?? []),
-          querySelect: async (query, bindings) => {
-            const outputBindings = await this.selectBatched(query, template.target, bindings ?? []);
-            return outputBindings.at(0);
-          },
-          querySelectAll: async (query, bindings) => {
-            return await this.selectBatched(query, template.target, bindings ?? []);
-          },
-          visualiseTerm: (term) => this.visualiseTerm(term),
-        };
         try {
-          return await this.eta.renderStringAsync(template.content, templateContext);
+          const context = this.generateTemplateContext(term, template.target);
+          return await this.eta.renderStringAsync(template.content, context);
         } catch (error: unknown) {
           return `<pre class="error">${error}</pre>`;
         }
       }
     }
     return `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
+  }
+
+  public async renderAll(term: RDF.Term | undefined): Promise<string[]> {
+    if (term) {
+      const renderPromises: Promise<string>[] = [];
+      for (const template of this.findTemplates(term)) {
+        const context = this.generateTemplateContext(term, template.target);
+        renderPromises.push(
+          new Promise((resolve) =>
+            this.eta
+              .renderStringAsync(template.content, context)
+              .then((html) => resolve(html))
+              .catch((error: unknown) => resolve(`<pre class="error">${error}</pre>`)),
+          ),
+        );
+      }
+      return await Promise.all(renderPromises);
+    }
+    return [`<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`];
   }
 
   protected bindingsToValues(bindings: IBindings[]): Algebra.Values {
