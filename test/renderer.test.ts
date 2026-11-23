@@ -53,7 +53,9 @@ describe("TemplateRenderer", () => {
     ): Promise<Record<string, RDF.Term>[]>;
     readonly askBuffer: QueryBuffer<boolean>;
     readonly selectBuffer: QueryBuffer<Record<string, RDF.Term>[]>;
-    readonly endpointFetcher: { fetchBindings(endpoint: string, query: string): unknown };
+    readonly endpointFetcher: {
+      fetchBindings(endpoint: string, query: string): unknown;
+    };
   };
 
   let renderer: TestTemplateRenderer;
@@ -71,7 +73,7 @@ describe("TemplateRenderer", () => {
             ["template", dataFactory.namedNode("urn:template")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>example</p>")],
-            ["keyword", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
+            ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
             [
               "priority",
               dataFactory.literal(
@@ -79,15 +81,14 @@ describe("TemplateRenderer", () => {
                 dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
               ),
             ],
-            ["target", dataFactory.namedNode("https://localhost/sparql")],
-            ["endpoint", dataFactory.literal("https://query.wikidata.org/sparql")],
+            ["endpoint", dataFactory.literal("urn:endpoint")],
           ]),
-          // A NamedNode-typed template, exercising the non-Literal keyword branch
+          // A NamedNode-typed template, exercising the non-Literal target branch
           new Map<string, RDF.Term>([
             ["template", dataFactory.namedNode("urn:other")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>named</p>")],
-            ["keyword", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Class")],
+            ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Class")],
             [
               "priority",
               dataFactory.literal(
@@ -95,15 +96,14 @@ describe("TemplateRenderer", () => {
                 dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
               ),
             ],
-            ["target", dataFactory.namedNode("https://localhost/sparql")],
-            ["endpoint", dataFactory.literal("https://query.wikidata.org/sparql")],
+            ["endpoint", dataFactory.literal("urn:endpoint")],
           ]),
           // A lower-priority duplicate, to exercise template deduplication
           new Map<string, RDF.Term>([
             ["template", dataFactory.namedNode("urn:template")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>duplicate</p>")],
-            ["keyword", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
+            ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
             [
               "priority",
               dataFactory.literal(
@@ -111,8 +111,7 @@ describe("TemplateRenderer", () => {
                 dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
               ),
             ],
-            ["target", dataFactory.namedNode("https://localhost/sparql")],
-            ["endpoint", dataFactory.literal("https://query.wikidata.org/sparql")],
+            ["endpoint", dataFactory.literal("urn:endpoint")],
           ]),
         ]),
       ),
@@ -149,16 +148,18 @@ describe("TemplateRenderer", () => {
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       const template = renderer.templates.get("urn:template")!;
       expect(template.content).toBe("<p>example</p>");
-      // The rdfs#Literal keyword maps to the "Literal" target type
+      // The rdfs#Literal target maps to the "Literal" target type,
+      // and its named-node value becomes the endpoint URI.
       expect(template.target).toBe("Literal");
-      // Any other keyword maps to the "NamedNode" target type
-      expect(renderer.templates.get("urn:other")!.target).toBe("NamedNode");
-      // Lower-priority duplicates are ignored, patterns come from the pattern binding,
-      // and endpoints come from the target binding
+      expect(template.endpoint).toBe("http://www.w3.org/2000/01/rdf-schema#Literal");
+      // The pattern is built from the endpoint binding literal.
+      expect(template.pattern.source).toBe("urn:endpoint");
+      // Any other target maps to the "NamedNode" target type.
+      const otherTemplate = renderer.templates.get("urn:other")!;
+      expect(otherTemplate.target).toBe("NamedNode");
+      expect(otherTemplate.endpoint).toBe("http://www.w3.org/2000/01/rdf-schema#Class");
+      // Lower-priority duplicates are ignored.
       expect(renderer.templates.size).toBe(2);
-      for (const storedTemplate of renderer.templates.values()) {
-        expect(storedTemplate.endpoint).toBe("https://localhost/sparql");
-      }
     });
 
     it("returns no templates when no sources are given", async () => {
@@ -386,7 +387,10 @@ describe("TemplateRenderer", () => {
   describe("generateQueryIdentifier", () => {
     it("returns identical identifiers for identical queries, endpoints and bindings", () => {
       const bindings = [
-        { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
+        {
+          var1: dataFactory.literal("value1"),
+          var2: dataFactory.literal("value2"),
+        },
       ];
       expect(
         renderer.generateQueryIdentifier(
