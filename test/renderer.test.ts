@@ -388,29 +388,47 @@ describe("TemplateRenderer", () => {
       const bindings = [
         { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
       ];
-      expect(renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", bindings)).toEqual(
-        renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", bindings),
+      expect(
+        renderer.generateQueryIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://query.wikidata.org/sparql",
+          bindings,
+        ),
+      ).toEqual(
+        renderer.generateQueryIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://query.wikidata.org/sparql",
+          bindings,
+        ),
       );
     });
 
     it("returns different identifiers for any difference in query, endpoint or binding values", () => {
-      const identifier = renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
-        { var1: dataFactory.literal("value1") },
-      ]);
-      expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier("ASK WHERE { ?s ?p ?o }", "https://query.wikidata.org/sparql", [
-          { var1: dataFactory.literal("value1") },
-        ]),
+      const identifier = renderer.generateQueryIdentifier(
+        "ASK WHERE { ?s a <http://example.org/type> }",
+        "https://query.wikidata.org/sparql",
+        [{ var1: dataFactory.literal("value1") }],
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://dbpedia.org/sparql", [
-          { var1: dataFactory.literal("value1") },
-        ]),
+        renderer.generateQueryIdentifier(
+          "ASK WHERE { ?s ?p ?o }",
+          "https://query.wikidata.org/sparql",
+          [{ var1: dataFactory.literal("value1") }],
+        ),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
-          { var1: dataFactory.literal("value2") },
-        ]),
+        renderer.generateQueryIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://dbpedia.org/sparql",
+          [{ var1: dataFactory.literal("value1") }],
+        ),
+      );
+      expect(identifier).not.toEqual(
+        renderer.generateQueryIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://query.wikidata.org/sparql",
+          [{ var1: dataFactory.literal("value2") }],
+        ),
       );
     });
   });
@@ -418,31 +436,42 @@ describe("TemplateRenderer", () => {
   describe("generateQueryBatchIdentifier", () => {
     it("returns identical identifiers for identical queries, endpoints and binding keys", () => {
       expect(
-        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
-          { var1: dataFactory.literal("value1") },
-          { var2: dataFactory.literal("value2") },
-        ]),
+        renderer.generateQueryBatchIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://query.wikidata.org/sparql",
+          [{ var1: dataFactory.literal("value1") }, { var2: dataFactory.literal("value2") }],
+        ),
       ).toEqual(
-        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
-          { var1: dataFactory.literal("other value") },
-          { var2: dataFactory.literal("other value") },
-        ]),
+        renderer.generateQueryBatchIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://query.wikidata.org/sparql",
+          [
+            { var1: dataFactory.literal("other value") },
+            { var2: dataFactory.literal("other value") },
+          ],
+        ),
       );
     });
 
     it("returns different identifiers for any difference in query or endpoint", () => {
-      const identifier = renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
-        { var1: dataFactory.literal("value1") },
-      ]);
-      expect(identifier).not.toEqual(
-        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s ?p ?o }", "https://query.wikidata.org/sparql", [
-          { var1: dataFactory.literal("value1") },
-        ]),
+      const identifier = renderer.generateQueryBatchIdentifier(
+        "ASK WHERE { ?s a <http://example.org/type> }",
+        "https://query.wikidata.org/sparql",
+        [{ var1: dataFactory.literal("value1") }],
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://dbpedia.org/sparql", [
-          { var1: dataFactory.literal("value1") },
-        ]),
+        renderer.generateQueryBatchIdentifier(
+          "ASK WHERE { ?s ?p ?o }",
+          "https://query.wikidata.org/sparql",
+          [{ var1: dataFactory.literal("value1") }],
+        ),
+      );
+      expect(identifier).not.toEqual(
+        renderer.generateQueryBatchIdentifier(
+          "ASK WHERE { ?s a <http://example.org/type> }",
+          "https://dbpedia.org/sparql",
+          [{ var1: dataFactory.literal("value1") }],
+        ),
       );
     });
   });
@@ -488,9 +517,18 @@ describe("TemplateRenderer", () => {
       // one, so the batch contains both a group of duplicate resolutions and a single
       // resolution. Each set has two bindings so identifier sorting is exercised.
       const bindingSets: Record<string, RDF.NamedNode | RDF.Literal>[][] = [
-        [{ o: dataFactory.namedNode("http://example.org/obj1") }, { p: dataFactory.literal("value1") }],
-        [{ p: dataFactory.literal("value1") }, { o: dataFactory.namedNode("http://example.org/obj1") }],
-        [{ o: dataFactory.namedNode("http://example.org/obj2") }, { p: dataFactory.literal("value1") }],
+        [
+          { o: dataFactory.namedNode("http://example.org/obj1") },
+          { p: dataFactory.literal("value1") },
+        ],
+        [
+          { p: dataFactory.literal("value1") },
+          { o: dataFactory.namedNode("http://example.org/obj1") },
+        ],
+        [
+          { o: dataFactory.namedNode("http://example.org/obj2") },
+          { p: dataFactory.literal("value1") },
+        ],
       ];
       const targetIdentifier = renderer.generateQueryIdentifier(
         query,
