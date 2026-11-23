@@ -141,16 +141,16 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
     return this.sparqlGenerator.generate(toAst(operation));
   }
 
-  protected generateTemplateContext(term: RDF.Term, target: string): ITemplateContext {
+  protected generateTemplateContext(term: RDF.Term, endpoint: string): ITemplateContext {
     return {
       term,
-      queryAsk: (query, bindings) => this.askBatched(query, target, bindings ?? []),
+      queryAsk: (query, bindings) => this.askBatched(query, endpoint, bindings ?? []),
       querySelect: async (query, bindings) => {
-        const outputBindings = await this.selectBatched(query, target, bindings ?? []);
+        const outputBindings = await this.selectBatched(query, endpoint, bindings ?? []);
         return outputBindings.at(0);
       },
       querySelectAll: async (query, bindings) => {
-        return await this.selectBatched(query, target, bindings ?? []);
+        return await this.selectBatched(query, endpoint, bindings ?? []);
       },
       visualiseTerm: (term) => this.render(term),
     };
