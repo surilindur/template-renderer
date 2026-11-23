@@ -69,20 +69,26 @@ class TemplateRenderer implements ITemplateRenderer {
   ): Promise<number> {
     this.templates.clear();
     if (sources.length > 0) {
-      const templateQuery = `PREFIX schema: <https://schema.org/>
+      const bindingsStream = await this.queryEngine.queryBindings(
+        `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX schema: <https://schema.org/>
 
-SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
+SELECT DISTINCT ?template ?priority ?text ?keyword ?pattern ?target WHERE {
   ?template a schema:SoftwareSourceCode .
   ?template schema:codeSampleType ?type .
   ?template schema:text ?text .
+  ?template schema:keywords ?keyword .
   ?template schema:pattern ?pattern .
   ?template schema:target ?target .
 
   OPTIONAL { ?template schema:order ?order . }
 
   BIND(COALESCE(?order, 0) AS ?priority)
-} ORDER BY DESC(?priority)`;
-      const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
+} ORDER BY DESC(?priority)`,
+        {
+          sources,
+        },
+      );
       // Allows terminating the loading of templates
       signal?.addEventListener("abort", () => bindingsStream.destroy());
       for await (const bindings of bindingsStream) {
@@ -92,6 +98,11 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
             content: (bindings.get("text") as RDF.Literal).value,
             pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
             target: (bindings.get("target") as RDF.NamedNode).value,
+            type:
+              (bindings.get("keyword") as RDF.NamedNode).value ===
+              "http://www.w3.org/2000/01/rdf-schema#Literal"
+                ? "Literal"
+                : "NamedNode",
           });
         }
       }
@@ -122,8 +133,13 @@ SELECT DISTINCT ?template ?priority ?text ?pattern ?target WHERE {
    * @returns The relevance as a numeric value, where higher is more relevant.
    */
   protected calculateRelevance(template: ITemplate, term: RDF.Term): number {
-    const match = template.pattern.exec(term.value);
-    return match?.[0].length ?? Number.NEGATIVE_INFINITY;
+    if (term.termType === template.type) {
+      const match = template.pattern.exec(term.value);
+      if (match) {
+        return match[0].length;
+      }
+    }
+    return Number.NEGATIVE_INFINITY;
   }
 
   protected parseOperation(op: string): Algebra.Operation {

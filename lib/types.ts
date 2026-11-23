@@ -80,6 +80,10 @@ interface ITemplate {
    * The target against which all queries issues by this template are evaluated.
    */
   target: string;
+  /**
+   * The type of RDF term this template can be applied to.
+   */
+  type: RDF.NamedNode["termType"] | RDF.Literal["termType"];
 }
 
 export type { QueryBatch, QueryBuffer, ITemplateRenderer, ITemplateContext, ITemplate };
