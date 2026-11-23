@@ -91,7 +91,7 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
             pattern: new RegExp((bindings.get("endpoint") as RDF.Literal).value, "u"),
             endpoint: (bindings.get("target") as RDF.NamedNode).value,
             target:
-              (bindings.get("keyword") as RDF.NamedNode).value ===
+              (bindings.get("target") as RDF.NamedNode).value ===
               "http://www.w3.org/2000/01/rdf-schema#Literal"
                 ? "Literal"
                 : "NamedNode",
