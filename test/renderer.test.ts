@@ -2,7 +2,7 @@ import type * as RDF from "@rdfjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArrayIterator } from "asynciterator";
 import { DataFactory } from "rdf-data-factory";
-import type { IQueryEngine } from "@comunica/types";
+import type { BindingsStream, IQueryEngine } from "@comunica/types";
 import type { Algebra } from "@traqula/algebra-transformations-1-2";
 import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
 import { TemplateRenderer } from "../lib/renderer";
@@ -71,10 +71,26 @@ describe("TemplateRenderer", () => {
             ["template", dataFactory.namedNode("urn:template")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>example</p>")],
+            ["keyword", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
             [
               "priority",
               dataFactory.literal(
                 "10",
+                dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
+              ),
+            ],
+            ["target", dataFactory.namedNode("https://localhost/sparql")],
+          ]),
+          // A NamedNode-typed template, exercising the non-Literal keyword branch
+          new Map<string, RDF.Term>([
+            ["template", dataFactory.namedNode("urn:other")],
+            ["pattern", dataFactory.literal(".*")],
+            ["text", dataFactory.literal("<p>named</p>")],
+            ["keyword", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Class")],
+            [
+              "priority",
+              dataFactory.literal(
+                "5",
                 dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
               ),
             ],
@@ -85,6 +101,7 @@ describe("TemplateRenderer", () => {
             ["template", dataFactory.namedNode("urn:template")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>duplicate</p>")],
+            ["keyword", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
             [
               "priority",
               dataFactory.literal(
@@ -125,10 +142,14 @@ describe("TemplateRenderer", () => {
 
   describe("loadTemplates", () => {
     it("retrieves templates using the query engine when sources are given", async () => {
-      await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.toBe(1);
+      await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.toBe(2);
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       const template = renderer.templates.get("urn:template")!;
       expect(template.content).toBe("<p>example</p>");
+      // The rdfs#Literal keyword maps to the "Literal" type
+      expect(template.type).toBe("Literal");
+      // Any other keyword maps to the "NamedNode" type
+      expect(renderer.templates.get("urn:other")!.type).toBe("NamedNode");
     });
 
     it("returns no templates when no sources are given", async () => {
@@ -152,7 +173,7 @@ describe("TemplateRenderer", () => {
         destroy: vi.fn(),
       };
       vi.spyOn(queryEngine, "queryBindings").mockResolvedValue(
-        bindingsStream as unknown as AsyncIterable<Record<string, RDF.Term>>,
+        bindingsStream as unknown as BindingsStream,
       );
       const promise = renderer.loadTemplates(["https://localhost/sparql"], controller.signal);
       // The abort listener is registered after the query engine resolves its stream
@@ -165,9 +186,24 @@ describe("TemplateRenderer", () => {
 
   describe("findTemplates", () => {
     it("returns the applicable templates sorted by relevance", () => {
-      const template1: ITemplate = { content: "content1", pattern: /^ab/, target: "urn:target1" };
-      const template2: ITemplate = { content: "content2", pattern: /^abc/, target: "urn:target2" };
-      const template3: ITemplate = { content: "content3", pattern: /^xyz$/, target: "urn:target3" };
+      const template1: ITemplate = {
+        content: "content1",
+        pattern: /^ab/,
+        target: "urn:target1",
+        type: "NamedNode",
+      };
+      const template2: ITemplate = {
+        content: "content2",
+        pattern: /^abc/,
+        target: "urn:target2",
+        type: "NamedNode",
+      };
+      const template3: ITemplate = {
+        content: "content3",
+        pattern: /^xyz$/,
+        target: "urn:target3",
+        type: "NamedNode",
+      };
       renderer.templates.set("t1", template1);
       renderer.templates.set("t2", template2);
       renderer.templates.set("t3", template3);
@@ -177,12 +213,34 @@ describe("TemplateRenderer", () => {
 
   describe("calculateRelevance", () => {
     it("returns the length of the regex match for applicable templates", () => {
-      const template: ITemplate = { content: "content", pattern: /^ab/, target: "urn:target" };
+      const template: ITemplate = {
+        content: "content",
+        pattern: /^ab/,
+        target: "urn:target",
+        type: "NamedNode",
+      };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(2);
     });
 
-    it("returns negative infinity for inapplicable templates", () => {
-      const template: ITemplate = { content: "content", pattern: /^xyz/, target: "urn:target" };
+    it("returns negative infinity when the term types do not match", () => {
+      const template: ITemplate = {
+        content: "content",
+        pattern: /^ab/,
+        target: "urn:target",
+        type: "Literal",
+      };
+      expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(
+        Number.NEGATIVE_INFINITY,
+      );
+    });
+
+    it("returns negative infinity when the pattern does not match", () => {
+      const template: ITemplate = {
+        content: "content",
+        pattern: /^xyz/,
+        target: "urn:target",
+        type: "NamedNode",
+      };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abc"))).toBe(
         Number.NEGATIVE_INFINITY,
       );
@@ -226,7 +284,12 @@ describe("TemplateRenderer", () => {
 
     it("visualises the term recursively", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
-        { content: "template content", pattern: /^.*/, target: "urn:target" } as ITemplate,
+        {
+          content: "template content",
+          pattern: /^.*/,
+          target: "urn:target",
+          type: "NamedNode",
+        } as ITemplate,
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
       vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as Record<string, RDF.Term>[]);
@@ -255,7 +318,12 @@ describe("TemplateRenderer", () => {
 
     it("visualises errors during template rendering", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
-        { content: "template content", pattern: /^.*/, target: "urn:target" } as ITemplate,
+        {
+          content: "template content",
+          pattern: /^.*/,
+          target: "urn:target",
+          type: "NamedNode",
+        } as ITemplate,
       ]);
       const error = new Error("Template rendering error");
       vi.spyOn(renderer.eta, "renderStringAsync").mockRejectedValue(error);
