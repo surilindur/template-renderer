@@ -147,7 +147,8 @@ describe("TemplateRenderer", () => {
       await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       const template = renderer.templates.get("urn:template")!;
-      expect(template.content).toBe("<p>example</p>");
+      // The template is loaded into the Eta cache under a name derived from its URI.
+      expect(template.name).toBe("@urn:template");
       // The rdfs#Literal target maps to the "Literal" target type,
       // and the pattern is built from the pattern binding.
       expect(template.target).toBe("Literal");
@@ -199,19 +200,19 @@ describe("TemplateRenderer", () => {
   describe("findTemplates", () => {
     it("returns the applicable templates sorted by relevance", () => {
       const template1: ITemplate = {
-        content: "content1",
+        name: "@t1",
         pattern: /^ab/,
         endpoint: "https://query.wikidata.org/sparql1",
         target: "NamedNode",
       };
       const template2: ITemplate = {
-        content: "content2",
+        name: "@t2",
         pattern: /^abc/,
         endpoint: "https://query.wikidata.org/sparql2",
         target: "NamedNode",
       };
       const template3: ITemplate = {
-        content: "content3",
+        name: "@t3",
         pattern: /^xyz$/,
         endpoint: "https://query.wikidata.org/sparql3",
         target: "NamedNode",
@@ -226,7 +227,7 @@ describe("TemplateRenderer", () => {
   describe("calculateRelevance", () => {
     it("returns the length of the regex match for applicable templates", () => {
       const template: ITemplate = {
-        content: "content",
+        name: "@t1",
         pattern: /^ab/,
         endpoint: "https://query.wikidata.org/sparql",
         target: "NamedNode",
@@ -236,7 +237,7 @@ describe("TemplateRenderer", () => {
 
     it("returns negative infinity when the term types do not match", () => {
       const template: ITemplate = {
-        content: "content",
+        name: "@t1",
         pattern: /^ab/,
         endpoint: "https://query.wikidata.org/sparql",
         target: "Literal",
@@ -248,7 +249,7 @@ describe("TemplateRenderer", () => {
 
     it("returns negative infinity when the pattern does not match", () => {
       const template: ITemplate = {
-        content: "content",
+        name: "@t1",
         pattern: /^xyz/,
         endpoint: "https://query.wikidata.org/sparql",
         target: "NamedNode",
@@ -296,6 +297,7 @@ describe("TemplateRenderer", () => {
 
     it("renderAll returns an empty array without applicable templates", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([]);
+      await renderer.loadTemplates([]);
       await expect(renderer.renderAll(dataFactory.namedNode("no match"))).resolves.toEqual([]);
     });
 
@@ -309,7 +311,7 @@ describe("TemplateRenderer", () => {
     it("visualises the term recursively", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         {
-          content: "template content",
+          name: "template content",
           pattern: /^.*/,
           endpoint: "https://query.wikidata.org/sparql",
           target: "NamedNode",
@@ -317,7 +319,8 @@ describe("TemplateRenderer", () => {
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
       vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as Record<string, RDF.Term>[]);
-      vi.spyOn(renderer.eta, "renderStringAsync").mockImplementation(
+      await renderer.loadTemplates([]);
+      vi.spyOn(renderer.eta, "renderAsync").mockImplementation(
         async (template: string, data: object): Promise<string> => {
           const context = data as ITemplateContext;
           expect(template).toBe("template content");
@@ -343,20 +346,21 @@ describe("TemplateRenderer", () => {
     it("renderAll renders every applicable template and swallows rendering errors", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         {
-          content: "first",
+          name: "first",
           pattern: /^.*/,
           endpoint: "https://query.wikidata.org/sparql1",
           target: "NamedNode",
         },
         {
-          content: "second",
+          name: "second",
           pattern: /^.*/,
           endpoint: "https://query.wikidata.org/sparql2",
           target: "NamedNode",
         } satisfies ITemplate,
       ]);
+      await renderer.loadTemplates([]);
       const error = new Error("Template rendering error");
-      vi.spyOn(renderer.eta, "renderStringAsync").mockImplementation(async (template) => {
+      vi.spyOn(renderer.eta, "renderAsync").mockImplementation(async (template) => {
         if (template === "first") {
           throw error;
         }
@@ -370,14 +374,15 @@ describe("TemplateRenderer", () => {
     it("visualises errors during template rendering", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         {
-          content: "template content",
+          name: "template content",
           pattern: /^.*/,
           endpoint: "https://query.wikidata.org/sparql",
           target: "NamedNode",
         } as ITemplate,
       ]);
+      await renderer.loadTemplates([]);
       const error = new Error("Template rendering error");
-      vi.spyOn(renderer.eta, "renderStringAsync").mockRejectedValue(error);
+      vi.spyOn(renderer.eta, "renderAsync").mockRejectedValue(error);
       await expect(renderer.render(dataFactory.namedNode("term to visualise"))).resolves.toBe(
         `<pre class="error">${String(error)}</pre>`,
       );

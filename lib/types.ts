@@ -78,14 +78,14 @@ interface ITemplateContext {
 
 interface ITemplate {
   /**
+   * The name by which the template was loaded into Eta cache.
+   */
+  name: string;
+  /**
    * The regular expression that the term value must match.
    * The length of the match will be the relevance of the template.
    */
   pattern: RegExp;
-  /**
-   * The content of the template, in EJS/Eta template language.
-   */
-  content: string;
   /**
    * The URI of the SPARQL endpoint that will handle all queries issued
    * from within the template using one of the query methods.

@@ -37,12 +37,12 @@ class TemplateRenderer implements ITemplateRenderer {
   protected readonly sparqlGenerator: Generator;
 
   public constructor(options: ITemplateRendererOptions) {
+    this.eta = new Eta(options.etaOptions ?? { useWith: true, cache: true });
     this.dataFactory = options.dataFactory ?? new DataFactory();
     this.algebraFactory = options.algebraFactory ?? new AlgebraFactory(this.dataFactory);
     this.queryEngine = options.queryEngine ?? new QueryEngine();
     this.sparqlGenerator = options.sparqlGenerator ?? new Generator();
     this.sparqlParser = options.sparqlParser ?? new Parser();
-    this.eta = new Eta(options.etaOptions ?? { useWith: true });
     this.endpointFetcher = new SparqlEndpointFetcher({
       ...options.endpointFetcherOptions,
       dataFactory: options.endpointFetcherOptions?.dataFactory ?? this.dataFactory,
@@ -68,6 +68,7 @@ class TemplateRenderer implements ITemplateRenderer {
     signal?: AbortSignal,
   ): Promise<void> {
     this.templates.clear();
+    this.eta.filepathCache = {};
     const query = `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX schema: <https://schema.org/>
 
@@ -86,8 +87,10 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
       for await (const bindings of bindingsStream) {
         const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
         if (!this.templates.has(template)) {
+          const name = `@${template}`;
+          this.eta.loadTemplate(name, (bindings.get("text") as RDF.Literal).value, { async: true });
           this.templates.set(template, {
-            content: (bindings.get("text") as RDF.Literal).value,
+            name,
             pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
             endpoint: (bindings.get("endpoint") as RDF.NamedNode).value,
             target:
@@ -157,12 +160,12 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
   }
 
   public async render(term: RDF.Term | undefined): Promise<string> {
-    if (term) {
+    if (term && this.eta) {
       const template = this.findTemplates(term).at(0);
       if (template) {
         try {
           const context = this.generateTemplateContext(term, template.endpoint);
-          return await this.eta.renderStringAsync(template.content, context);
+          return await this.eta.renderAsync(template.name, context);
         } catch (error: unknown) {
           return `<pre class="error">${error}</pre>`;
         }
@@ -172,14 +175,15 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
   }
 
   public async renderAll(term: RDF.Term | undefined): Promise<string[]> {
-    if (term) {
+    if (term && this.eta) {
+      const eta = this.eta;
       const renderPromises: Promise<string>[] = [];
       for (const template of this.findTemplates(term)) {
         const context = this.generateTemplateContext(term, template.endpoint);
         renderPromises.push(
           new Promise((resolve) =>
-            this.eta
-              .renderStringAsync(template.content, context)
+            eta
+              .renderAsync(template.name, context)
               .then((html) => resolve(html))
               .catch((error: unknown) => resolve(`<pre class="error">${error}</pre>`)),
           ),
@@ -505,7 +509,7 @@ interface ITemplateRendererOptions {
    * Optional confgiguration for the Eta template engine.
    * Use of with for async is always required.
    */
-  etaOptions?: Partial<EtaConfig> & { useWith: true };
+  etaOptions?: Partial<EtaConfig> & { useWith: true; cache: true };
 }
 
 export {
