@@ -80,6 +80,7 @@ describe("TemplateRenderer", () => {
               ),
             ],
             ["target", dataFactory.namedNode("https://localhost/sparql")],
+            ["endpoint", dataFactory.literal("http[s]?://dbpedia.org/resource/(.+)")],
           ]),
           // A NamedNode-typed template, exercising the non-Literal keyword branch
           new Map<string, RDF.Term>([
@@ -95,6 +96,7 @@ describe("TemplateRenderer", () => {
               ),
             ],
             ["target", dataFactory.namedNode("https://localhost/sparql")],
+            ["endpoint", dataFactory.literal("http[s]?://dbpedia.org/resource/(.+)")],
           ]),
           // A lower-priority duplicate, to exercise template deduplication
           new Map<string, RDF.Term>([
@@ -110,6 +112,7 @@ describe("TemplateRenderer", () => {
               ),
             ],
             ["target", dataFactory.namedNode("https://localhost/sparql")],
+            ["endpoint", dataFactory.literal("http[s]?://dbpedia.org/resource/(.+)")],
           ]),
         ]),
       ),
@@ -133,7 +136,7 @@ describe("TemplateRenderer", () => {
         {},
       ) as unknown as TestTemplateRenderer;
       // JSON.stringify(undefined) serializes to the string "undefined"
-      await expect(defaultRenderer.visualiseTerm(undefined)).resolves.toBe(
+      await expect(defaultRenderer.render(undefined)).resolves.toBe(
         `<pre class="error">${JSON.stringify(undefined)}</pre>`,
       );
       expect(defaultRenderer.findTemplates(dataFactory.namedNode("abc"))).toEqual([]);
@@ -142,19 +145,25 @@ describe("TemplateRenderer", () => {
 
   describe("loadTemplates", () => {
     it("retrieves templates using the query engine when sources are given", async () => {
-      await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.toBe(2);
+      await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
       const template = renderer.templates.get("urn:template")!;
       expect(template.content).toBe("<p>example</p>");
-      // The rdfs#Literal keyword maps to the "Literal" type
-      expect(template.type).toBe("Literal");
-      // Any other keyword maps to the "NamedNode" type
-      expect(renderer.templates.get("urn:other")!.type).toBe("NamedNode");
+      // The rdfs#Literal keyword maps to the "Literal" target type
+      expect(template.target).toBe("Literal");
+      // Any other keyword maps to the "NamedNode" target type
+      expect(renderer.templates.get("urn:other")!.target).toBe("NamedNode");
+      // Lower-priority duplicates are ignored and endpoints come from the endpoint binding
+      expect(renderer.templates.size).toBe(2);
+      for (const storedTemplate of renderer.templates.values()) {
+        expect(storedTemplate.endpoint).toBe("https://localhost/sparql");
+      }
     });
 
     it("returns no templates when no sources are given", async () => {
-      await expect(renderer.loadTemplates([])).resolves.toBe(0);
+      await expect(renderer.loadTemplates([])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).not.toHaveBeenCalled();
+      expect(renderer.templates.size).toBe(0);
     });
 
     it("forwards errors from the query engine", async () => {
@@ -180,7 +189,8 @@ describe("TemplateRenderer", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       controller.abort();
       expect(bindingsStream.destroy).toHaveBeenCalledOnce();
-      await expect(promise).resolves.toBe(0);
+      await expect(promise).resolves.not.toThrow();
+      expect(renderer.templates.size).toBe(0);
     });
   });
 
@@ -189,20 +199,20 @@ describe("TemplateRenderer", () => {
       const template1: ITemplate = {
         content: "content1",
         pattern: /^ab/,
-        target: "urn:target1",
-        type: "NamedNode",
+        endpoint: "urn:endpoint1",
+        target: "NamedNode",
       };
       const template2: ITemplate = {
         content: "content2",
         pattern: /^abc/,
-        target: "urn:target2",
-        type: "NamedNode",
+        endpoint: "urn:endpoint2",
+        target: "NamedNode",
       };
       const template3: ITemplate = {
         content: "content3",
         pattern: /^xyz$/,
-        target: "urn:target3",
-        type: "NamedNode",
+        endpoint: "urn:endpoint3",
+        target: "NamedNode",
       };
       renderer.templates.set("t1", template1);
       renderer.templates.set("t2", template2);
@@ -216,8 +226,8 @@ describe("TemplateRenderer", () => {
       const template: ITemplate = {
         content: "content",
         pattern: /^ab/,
-        target: "urn:target",
-        type: "NamedNode",
+        endpoint: "urn:endpoint",
+        target: "NamedNode",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(2);
     });
@@ -226,8 +236,8 @@ describe("TemplateRenderer", () => {
       const template: ITemplate = {
         content: "content",
         pattern: /^ab/,
-        target: "urn:target",
-        type: "Literal",
+        endpoint: "urn:endpoint",
+        target: "Literal",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(
         Number.NEGATIVE_INFINITY,
@@ -238,8 +248,8 @@ describe("TemplateRenderer", () => {
       const template: ITemplate = {
         content: "content",
         pattern: /^xyz/,
-        target: "urn:target",
-        type: "NamedNode",
+        endpoint: "urn:endpoint",
+        target: "NamedNode",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abc"))).toBe(
         Number.NEGATIVE_INFINITY,
@@ -274,12 +284,24 @@ describe("TemplateRenderer", () => {
     });
   });
 
-  describe("visualiseTerm", () => {
+  describe("render and renderAll", () => {
     it("returns direct serialization without applicable templates", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([]);
-      await expect(renderer.visualiseTerm({ value: "abc" } as unknown as RDF.Term)).resolves.toBe(
+      await expect(renderer.render({ value: "abc" } as unknown as RDF.Term)).resolves.toBe(
         `<pre class="error">${JSON.stringify({ value: "abc" }, undefined, 2)}</pre>`,
       );
+    });
+
+    it("renderAll returns an empty array without applicable templates", async () => {
+      vi.spyOn(renderer, "findTemplates").mockReturnValue([]);
+      await expect(renderer.renderAll(dataFactory.namedNode("no match"))).resolves.toEqual([]);
+    });
+
+    it("renderAll falls back to serialization for undefined terms", async () => {
+      // JSON.stringify(undefined) returns undefined, which stringifies as "undefined" in the template literal
+      await expect(renderer.renderAll(undefined)).resolves.toEqual([
+        `<pre class="error">${String(JSON.stringify(undefined))}</pre>`,
+      ]);
     });
 
     it("visualises the term recursively", async () => {
@@ -287,8 +309,8 @@ describe("TemplateRenderer", () => {
         {
           content: "template content",
           pattern: /^.*/,
-          target: "urn:target",
-          type: "NamedNode",
+          endpoint: "urn:endpoint",
+          target: "NamedNode",
         } as ITemplate,
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
@@ -311,9 +333,36 @@ describe("TemplateRenderer", () => {
           return "recursive output html";
         },
       );
-      await expect(
-        renderer.visualiseTerm(dataFactory.namedNode("term to visualise")),
-      ).resolves.toBe("recursive output html");
+      await expect(renderer.render(dataFactory.namedNode("term to visualise"))).resolves.toBe(
+        "recursive output html",
+      );
+    });
+
+    it("renderAll renders every applicable template and swallows rendering errors", async () => {
+      vi.spyOn(renderer, "findTemplates").mockReturnValue([
+        {
+          content: "first",
+          pattern: /^.*/,
+          endpoint: "urn:endpoint1",
+          target: "NamedNode",
+        },
+        {
+          content: "second",
+          pattern: /^.*/,
+          endpoint: "urn:endpoint2",
+          target: "NamedNode",
+        } satisfies ITemplate,
+      ]);
+      const error = new Error("Template rendering error");
+      vi.spyOn(renderer.eta, "renderStringAsync").mockImplementation(async (template) => {
+        if (template === "first") {
+          throw error;
+        }
+        return "<p>second</p>";
+      });
+      await expect(renderer.renderAll(dataFactory.namedNode("term to visualise"))).resolves.toEqual(
+        [`<pre class="error">${String(error)}</pre>`, "<p>second</p>"],
+      );
     });
 
     it("visualises errors during template rendering", async () => {
@@ -321,15 +370,15 @@ describe("TemplateRenderer", () => {
         {
           content: "template content",
           pattern: /^.*/,
-          target: "urn:target",
-          type: "NamedNode",
+          endpoint: "urn:endpoint",
+          target: "NamedNode",
         } as ITemplate,
       ]);
       const error = new Error("Template rendering error");
       vi.spyOn(renderer.eta, "renderStringAsync").mockRejectedValue(error);
-      await expect(
-        renderer.visualiseTerm(dataFactory.namedNode("term to visualise")),
-      ).resolves.toBe(`<pre class="error">${String(error)}</pre>`);
+      await expect(renderer.render(dataFactory.namedNode("term to visualise"))).resolves.toBe(
+        `<pre class="error">${String(error)}</pre>`,
+      );
     });
   });
 
