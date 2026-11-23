@@ -8,7 +8,7 @@ import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
 import { TemplateRenderer } from "../lib/renderer";
 import type { ITemplate, ITemplateContext, QueryBuffer } from "../lib/types";
 import type { Eta } from "eta";
-import { IBindings } from "fetch-sparql-endpoint";
+import type { IBindings } from "fetch-sparql-endpoint";
 
 describe("TemplateRenderer", () => {
   type TestTemplateRenderer = TemplateRenderer & {
@@ -80,7 +80,7 @@ describe("TemplateRenderer", () => {
               ),
             ],
             ["target", dataFactory.namedNode("https://localhost/sparql")],
-            ["endpoint", dataFactory.literal("http[s]?://dbpedia.org/resource/(.+)")],
+            ["endpoint", dataFactory.literal("https://query.wikidata.org/sparql")],
           ]),
           // A NamedNode-typed template, exercising the non-Literal keyword branch
           new Map<string, RDF.Term>([
@@ -96,7 +96,7 @@ describe("TemplateRenderer", () => {
               ),
             ],
             ["target", dataFactory.namedNode("https://localhost/sparql")],
-            ["endpoint", dataFactory.literal("http[s]?://dbpedia.org/resource/(.+)")],
+            ["endpoint", dataFactory.literal("https://query.wikidata.org/sparql")],
           ]),
           // A lower-priority duplicate, to exercise template deduplication
           new Map<string, RDF.Term>([
@@ -112,7 +112,7 @@ describe("TemplateRenderer", () => {
               ),
             ],
             ["target", dataFactory.namedNode("https://localhost/sparql")],
-            ["endpoint", dataFactory.literal("http[s]?://dbpedia.org/resource/(.+)")],
+            ["endpoint", dataFactory.literal("https://query.wikidata.org/sparql")],
           ]),
         ]),
       ),
@@ -153,7 +153,8 @@ describe("TemplateRenderer", () => {
       expect(template.target).toBe("Literal");
       // Any other keyword maps to the "NamedNode" target type
       expect(renderer.templates.get("urn:other")!.target).toBe("NamedNode");
-      // Lower-priority duplicates are ignored and endpoints come from the endpoint binding
+      // Lower-priority duplicates are ignored, patterns come from the pattern binding,
+      // and endpoints come from the target binding
       expect(renderer.templates.size).toBe(2);
       for (const storedTemplate of renderer.templates.values()) {
         expect(storedTemplate.endpoint).toBe("https://localhost/sparql");
@@ -199,19 +200,19 @@ describe("TemplateRenderer", () => {
       const template1: ITemplate = {
         content: "content1",
         pattern: /^ab/,
-        endpoint: "urn:endpoint1",
+        endpoint: "https://query.wikidata.org/sparql1",
         target: "NamedNode",
       };
       const template2: ITemplate = {
         content: "content2",
         pattern: /^abc/,
-        endpoint: "urn:endpoint2",
+        endpoint: "https://query.wikidata.org/sparql2",
         target: "NamedNode",
       };
       const template3: ITemplate = {
         content: "content3",
         pattern: /^xyz$/,
-        endpoint: "urn:endpoint3",
+        endpoint: "https://query.wikidata.org/sparql3",
         target: "NamedNode",
       };
       renderer.templates.set("t1", template1);
@@ -226,7 +227,7 @@ describe("TemplateRenderer", () => {
       const template: ITemplate = {
         content: "content",
         pattern: /^ab/,
-        endpoint: "urn:endpoint",
+        endpoint: "https://query.wikidata.org/sparql",
         target: "NamedNode",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(2);
@@ -236,7 +237,7 @@ describe("TemplateRenderer", () => {
       const template: ITemplate = {
         content: "content",
         pattern: /^ab/,
-        endpoint: "urn:endpoint",
+        endpoint: "https://query.wikidata.org/sparql",
         target: "Literal",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(
@@ -248,7 +249,7 @@ describe("TemplateRenderer", () => {
       const template: ITemplate = {
         content: "content",
         pattern: /^xyz/,
-        endpoint: "urn:endpoint",
+        endpoint: "https://query.wikidata.org/sparql",
         target: "NamedNode",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abc"))).toBe(
@@ -309,7 +310,7 @@ describe("TemplateRenderer", () => {
         {
           content: "template content",
           pattern: /^.*/,
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           target: "NamedNode",
         } as ITemplate,
       ]);
@@ -343,13 +344,13 @@ describe("TemplateRenderer", () => {
         {
           content: "first",
           pattern: /^.*/,
-          endpoint: "urn:endpoint1",
+          endpoint: "https://query.wikidata.org/sparql1",
           target: "NamedNode",
         },
         {
           content: "second",
           pattern: /^.*/,
-          endpoint: "urn:endpoint2",
+          endpoint: "https://query.wikidata.org/sparql2",
           target: "NamedNode",
         } satisfies ITemplate,
       ]);
@@ -370,7 +371,7 @@ describe("TemplateRenderer", () => {
         {
           content: "template content",
           pattern: /^.*/,
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           target: "NamedNode",
         } as ITemplate,
       ]);
@@ -387,27 +388,27 @@ describe("TemplateRenderer", () => {
       const bindings = [
         { var1: dataFactory.literal("value1"), var2: dataFactory.literal("value2") },
       ];
-      expect(renderer.generateQueryIdentifier("query1", "source1", bindings)).toEqual(
-        renderer.generateQueryIdentifier("query1", "source1", bindings),
+      expect(renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", bindings)).toEqual(
+        renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", bindings),
       );
     });
 
     it("returns different identifiers for any difference in query, endpoint or binding values", () => {
-      const identifier = renderer.generateQueryIdentifier("query1", "source1", [
+      const identifier = renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
         { var1: dataFactory.literal("value1") },
       ]);
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier("query2", "source1", [
+        renderer.generateQueryIdentifier("ASK WHERE { ?s ?p ?o }", "https://query.wikidata.org/sparql", [
           { var1: dataFactory.literal("value1") },
         ]),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier("query1", "source2", [
+        renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://dbpedia.org/sparql", [
           { var1: dataFactory.literal("value1") },
         ]),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryIdentifier("query1", "source1", [
+        renderer.generateQueryIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
           { var1: dataFactory.literal("value2") },
         ]),
       );
@@ -417,12 +418,12 @@ describe("TemplateRenderer", () => {
   describe("generateQueryBatchIdentifier", () => {
     it("returns identical identifiers for identical queries, endpoints and binding keys", () => {
       expect(
-        renderer.generateQueryBatchIdentifier("query1", "source1", [
+        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
           { var1: dataFactory.literal("value1") },
           { var2: dataFactory.literal("value2") },
         ]),
       ).toEqual(
-        renderer.generateQueryBatchIdentifier("query1", "source1", [
+        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
           { var1: dataFactory.literal("other value") },
           { var2: dataFactory.literal("other value") },
         ]),
@@ -430,16 +431,16 @@ describe("TemplateRenderer", () => {
     });
 
     it("returns different identifiers for any difference in query or endpoint", () => {
-      const identifier = renderer.generateQueryBatchIdentifier("query1", "source1", [
+      const identifier = renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://query.wikidata.org/sparql", [
         { var1: dataFactory.literal("value1") },
       ]);
       expect(identifier).not.toEqual(
-        renderer.generateQueryBatchIdentifier("query2", "source1", [
+        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s ?p ?o }", "https://query.wikidata.org/sparql", [
           { var1: dataFactory.literal("value1") },
         ]),
       );
       expect(identifier).not.toEqual(
-        renderer.generateQueryBatchIdentifier("query1", "source2", [
+        renderer.generateQueryBatchIdentifier("ASK WHERE { ?s a <http://example.org/type> }", "https://dbpedia.org/sparql", [
           { var1: dataFactory.literal("value1") },
         ]),
       );
@@ -456,8 +457,10 @@ describe("TemplateRenderer", () => {
           executor(dataFactory.namedNode("urn:batch"));
           return Promise.resolve("result");
         });
-      await expect(renderer.askBatched("query", "urn:endpoint", [])).resolves.toBe("result");
-      await expect(renderer.selectBatched("query", "urn:endpoint", [])).resolves.toBe("result");
+      const endpoint = "https://query.wikidata.org/sparql";
+      const query = "ASK WHERE { ?s a <http://www.w3.org/2000/01/rdf-schema#Literal> }";
+      await expect(renderer.askBatched(query, endpoint, [])).resolves.toBe("result");
+      await expect(renderer.selectBatched(query, endpoint, [])).resolves.toBe("result");
       expect(executeBatched).toHaveBeenCalledTimes(2);
       // Each batch function must dispatch to its own buffer and executor
       expect(executeBatched.mock.calls[0][3]).toBe(renderer.askBuffer);
@@ -472,7 +475,7 @@ describe("TemplateRenderer", () => {
         createFakeStream(rows) as unknown as NodeJS.ReadableStream,
       );
       await expect(
-        renderer.selectAll("SELECT ?s WHERE { ?s ?p ?o }", "urn:endpoint"),
+        renderer.selectAll("SELECT ?s WHERE { ?s ?p ?o }", "https://query.wikidata.org/sparql"),
       ).resolves.toEqual(rows);
     });
 
@@ -480,14 +483,14 @@ describe("TemplateRenderer", () => {
       vi.useFakeTimers();
       const buffer: QueryBuffer<boolean> = {};
       const query = "ASK WHERE { ?s ?p ?o }";
-      const endpoint = "urn:endpoint";
-      // Two identical queries (same bindings, in reversed order) and one different
+      const endpoint = "https://query.wikidata.org/sparql";
+      // Two identical queries (same bindings, in reversed key order) and one different
       // one, so the batch contains both a group of duplicate resolutions and a single
       // resolution. Each set has two bindings so identifier sorting is exercised.
       const bindingSets: Record<string, RDF.NamedNode | RDF.Literal>[][] = [
-        [{ z: dataFactory.namedNode("o0") }, { a: dataFactory.literal("p1") }],
-        [{ a: dataFactory.literal("p1") }, { z: dataFactory.namedNode("o0") }],
-        [{ z: dataFactory.namedNode("o1") }, { a: dataFactory.literal("p1") }],
+        [{ o: dataFactory.namedNode("http://example.org/obj1") }, { p: dataFactory.literal("value1") }],
+        [{ p: dataFactory.literal("value1") }, { o: dataFactory.namedNode("http://example.org/obj1") }],
+        [{ o: dataFactory.namedNode("http://example.org/obj2") }, { p: dataFactory.literal("value1") }],
       ];
       const targetIdentifier = renderer.generateQueryIdentifier(
         query,
@@ -526,7 +529,7 @@ describe("TemplateRenderer", () => {
       const buffer: QueryBuffer<boolean> = {
         [batchIdentifier.value]: {
           bindings: [],
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           query: "ASK WHERE { ?s ?p ?o }",
           rejections: {
             [queryIdentifier.value]: [vi.fn()],
@@ -550,7 +553,7 @@ describe("TemplateRenderer", () => {
       const buffer: QueryBuffer<boolean> = {
         [batchIdentifier.value]: {
           bindings: [],
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           query: "ASK WHERE { ?s ?p ?o }",
           rejections: {
             [queryIdentifier.value]: [queryRejection],
@@ -576,7 +579,7 @@ describe("TemplateRenderer", () => {
       const buffer: QueryBuffer<boolean> = {
         [batchIdentifier.value]: {
           bindings: [],
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           query: "ASK WHERE { ?s ?p ?o }",
           rejections: {
             [queryIdentifier.value]: [queryRejection],
@@ -608,7 +611,7 @@ describe("TemplateRenderer", () => {
       const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
         [batchIdentifier.value]: {
           bindings: [],
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           query: "SELECT ?s WHERE { ?s ?p ?o }",
           rejections: {
             [queryIdentifier.value]: [vi.fn()],
@@ -632,7 +635,7 @@ describe("TemplateRenderer", () => {
       const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
         [batchIdentifier.value]: {
           bindings: [],
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           query: "SELECT ?s WHERE { ?s ?p ?o }",
           rejections: {
             [queryIdentifier.value]: [queryRejection],
@@ -658,7 +661,7 @@ describe("TemplateRenderer", () => {
       const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
         [batchIdentifier.value]: {
           bindings: [],
-          endpoint: "urn:endpoint",
+          endpoint: "https://query.wikidata.org/sparql",
           query: "SELECT ?s WHERE { ?s ?p ?o }",
           rejections: {
             [queryIdentifier.value]: [queryRejection],
