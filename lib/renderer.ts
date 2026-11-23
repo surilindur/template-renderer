@@ -161,7 +161,7 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
       const template = this.findTemplates(term).at(0);
       if (template) {
         try {
-          const context = this.generateTemplateContext(term, template.target);
+          const context = this.generateTemplateContext(term, template.endpoint);
           return await this.eta.renderStringAsync(template.content, context);
         } catch (error: unknown) {
           return `<pre class="error">${error}</pre>`;
@@ -175,7 +175,7 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
     if (term) {
       const renderPromises: Promise<string>[] = [];
       for (const template of this.findTemplates(term)) {
-        const context = this.generateTemplateContext(term, template.target);
+        const context = this.generateTemplateContext(term, template.endpoint);
         renderPromises.push(
           new Promise((resolve) =>
             this.eta
