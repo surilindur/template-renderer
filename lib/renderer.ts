@@ -19,6 +19,19 @@ import type {
   QueryBuffer,
 } from "./types";
 
+const templateQuery = `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX schema: <https://schema.org/>
+
+SELECT DISTINCT ?template ?target ?targetProduct ?pattern ?text WHERE {
+  ?template a schema:SoftwareSourceCode .
+  ?template schema:programmingLanguage "Eta" .
+  ?template schema:target ?target .
+  ?template schema:targetProduct ?targetProduct .
+  ?template schema:pattern ?pattern .
+  ?template schema:text ?text .
+  ?template schema:position ?position .
+} ORDER BY DESC(?position)` as const;
+
 class TemplateRenderer implements ITemplateRenderer {
   protected readonly eta: Eta;
   protected readonly queryEngine: IQueryEngine;
@@ -58,46 +71,34 @@ class TemplateRenderer implements ITemplateRenderer {
   }
 
   /**
-   * Collects all templates from the specified SPARQL endpoint.
-   * @param endpoint The SPARQL endpoint to query.
+   * Collect all templates from the specified sources, and load them into the Eta cache.
+   * Previously collected templates are erased before new ones are loaded.
+   * @param sources The sources to query for templates.
    * @param signal Optional signal to stop template loading.
-   * @returns The number of templates discovered.
    */
   public async loadTemplates(
     sources: QuerySourceUnidentified[],
     signal?: AbortSignal,
   ): Promise<void> {
+    this.eta.templatesAsync.reset();
     this.templates.clear();
-    this.eta.filepathCache = {};
-    const query = `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX schema: <https://schema.org/>
-
-SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
-  ?template a schema:SoftwareSourceCode .
-  ?template schema:programmingLanguage "Eta" .
-  ?template schema:target ?target .
-  ?template schema:targetProduct ?endpoint .
-  ?template schema:pattern ?pattern .
-  ?template schema:text ?text .
-  ?template schema:position ?priority .
-} ORDER BY DESC(?priority)`;
     if (sources.length > 0) {
-      const bindingsStream = await this.queryEngine.queryBindings(query, { sources });
+      const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
       signal?.addEventListener("abort", () => bindingsStream.destroy());
       for await (const bindings of bindingsStream) {
-        const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
-        if (!this.templates.has(template)) {
-          const name = `@${template}`;
-          this.eta.loadTemplate(name, (bindings.get("text") as RDF.Literal).value, { async: true });
-          this.templates.set(template, {
-            name,
-            pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
-            endpoint: (bindings.get("endpoint") as RDF.NamedNode).value,
-            target:
-              (bindings.get("target") as RDF.NamedNode).value ===
-              "http://www.w3.org/2000/01/rdf-schema#Literal"
-                ? "Literal"
-                : "NamedNode",
+        const etaName = `@${(bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value}`;
+        if (!this.templates.has(etaName)) {
+          const text = (bindings.get("text") as RDF.Literal).value;
+          const pattern = (bindings.get("pattern") as RDF.Literal).value;
+          const target = (bindings.get("target") as RDF.NamedNode).value;
+          const targetProduct = (bindings.get("targetProduct") as RDF.NamedNode).value;
+          this.eta.loadTemplate(etaName, text, { async: true });
+          this.templates.set(etaName, {
+            etaName,
+            valuePattern: new RegExp(pattern, "u"),
+            sparqlEndpoint: targetProduct,
+            termType:
+              target === "http://www.w3.org/2000/01/rdf-schema#Literal" ? "Literal" : "NamedNode",
           });
         }
       }
@@ -127,8 +128,8 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
    * @returns The relevance as a numeric value, where higher is more relevant.
    */
   protected calculateRelevance(template: ITemplate, term: RDF.Term): number {
-    if (term.termType === template.target) {
-      const match = template.pattern.exec(term.value);
+    if (term.termType === template.termType) {
+      const match = template.valuePattern.exec(term.value);
       if (match) {
         return match[0].length;
       }
@@ -148,24 +149,20 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
     return {
       term,
       queryAsk: (query, bindings) => this.askBatched(query, endpoint, bindings ?? []),
-      querySelect: async (query, bindings) => {
-        const outputBindings = await this.selectBatched(query, endpoint, bindings ?? []);
-        return outputBindings.at(0);
-      },
-      querySelectAll: async (query, bindings) => {
-        return await this.selectBatched(query, endpoint, bindings ?? []);
-      },
+      querySelect: async (query, bindings) =>
+        (await this.selectBatched(query, endpoint, bindings ?? [])).at(0),
+      querySelectAll: (query, bindings) => this.selectBatched(query, endpoint, bindings ?? []),
       visualiseTerm: (term) => this.render(term),
     };
   }
 
   public async render(term: RDF.Term | undefined): Promise<string> {
-    if (term && this.eta) {
+    if (term) {
       const template = this.findTemplates(term).at(0);
       if (template) {
         try {
-          const context = this.generateTemplateContext(term, template.endpoint);
-          return await this.eta.renderAsync(template.name, context);
+          const context = this.generateTemplateContext(term, template.sparqlEndpoint);
+          return await this.eta.renderAsync(template.etaName, context);
         } catch (error: unknown) {
           return `<pre class="error">${error}</pre>`;
         }
@@ -175,15 +172,14 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
   }
 
   public async renderAll(term: RDF.Term | undefined): Promise<string[]> {
-    if (term && this.eta) {
-      const eta = this.eta;
+    if (term) {
       const renderPromises: Promise<string>[] = [];
       for (const template of this.findTemplates(term)) {
-        const context = this.generateTemplateContext(term, template.endpoint);
+        const context = this.generateTemplateContext(term, template.sparqlEndpoint);
         renderPromises.push(
           new Promise((resolve) =>
-            eta
-              .renderAsync(template.name, context)
+            this.eta
+              .renderAsync(template.etaName, context)
               .then((html) => resolve(html))
               .catch((error: unknown) => resolve(`<pre class="error">${error}</pre>`)),
           ),

@@ -78,24 +78,25 @@ interface ITemplateContext {
 
 interface ITemplate {
   /**
-   * The name by which the template was loaded into Eta cache.
+   * The Eta-specific template name derived from the template URI,
+   * used to map template metadata to the Eta template cache entry.
    */
-  name: string;
+  etaName: string;
   /**
    * The regular expression that the term value must match.
    * The length of the match will be the relevance of the template.
    */
-  pattern: RegExp;
+  valuePattern: RegExp;
   /**
    * The URI of the SPARQL endpoint that will handle all queries issued
    * from within the template using one of the query methods.
    */
-  endpoint: string;
+  sparqlEndpoint: string;
   /**
    * The type of RDF term this template can be applied to.
    * This helps avoid running named node templates on literals, for example.
    */
-  target: RDF.NamedNode["termType"] | RDF.Literal["termType"];
+  termType: RDF.NamedNode["termType"] | RDF.Literal["termType"];
 }
 
 export type { QueryBatch, QueryBuffer, ITemplateRenderer, ITemplateContext, ITemplate };

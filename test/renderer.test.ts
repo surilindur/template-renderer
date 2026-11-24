@@ -7,7 +7,7 @@ import type { Algebra } from "@traqula/algebra-transformations-1-2";
 import { AlgebraFactory } from "@traqula/algebra-transformations-1-2";
 import { TemplateRenderer } from "../lib/renderer";
 import type { ITemplate, ITemplateContext, QueryBuffer } from "../lib/types";
-import type { Eta } from "eta";
+import type { Eta, TemplateFunction } from "eta";
 import type { IBindings } from "fetch-sparql-endpoint";
 
 describe("TemplateRenderer", () => {
@@ -35,12 +35,9 @@ describe("TemplateRenderer", () => {
       buffer: QueryBuffer<T>,
       executor: (batchIdentifier: RDF.NamedNode) => Promise<void>,
     ): Promise<T>;
-    selectAll(query: string, endpoint: string): Promise<Record<string, RDF.Term>[]>;
+    selectAll(query: string, endpoint: string): Promise<IBindings[]>;
     executeAsk(buffer: QueryBuffer<boolean>, batchIdentifier: RDF.NamedNode): Promise<void>;
-    executeSelect(
-      buffer: QueryBuffer<Record<string, RDF.Term>[]>,
-      batchIdentifier: RDF.NamedNode,
-    ): Promise<void>;
+    executeSelect(buffer: QueryBuffer<IBindings[]>, batchIdentifier: RDF.NamedNode): Promise<void>;
     askBatched(
       query: string,
       endpoint: string,
@@ -50,9 +47,9 @@ describe("TemplateRenderer", () => {
       query: string,
       endpoint: string,
       bindings: Record<string, RDF.NamedNode | RDF.Literal>[],
-    ): Promise<Record<string, RDF.Term>[]>;
+    ): Promise<IBindings[]>;
     readonly askBuffer: QueryBuffer<boolean>;
-    readonly selectBuffer: QueryBuffer<Record<string, RDF.Term>[]>;
+    readonly selectBuffer: QueryBuffer<IBindings[]>;
     readonly endpointFetcher: {
       fetchBindings(endpoint: string, query: string): unknown;
     };
@@ -74,6 +71,7 @@ describe("TemplateRenderer", () => {
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>example</p>")],
             ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
+            ["targetProduct", dataFactory.namedNode("urn:endpoint")],
             [
               "priority",
               dataFactory.literal(
@@ -89,6 +87,7 @@ describe("TemplateRenderer", () => {
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>named</p>")],
             ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Class")],
+            ["targetProduct", dataFactory.namedNode("urn:endpoint")],
             [
               "priority",
               dataFactory.literal(
@@ -104,6 +103,7 @@ describe("TemplateRenderer", () => {
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>duplicate</p>")],
             ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
+            ["targetProduct", dataFactory.namedNode("urn:endpoint")],
             [
               "priority",
               dataFactory.literal(
@@ -146,19 +146,19 @@ describe("TemplateRenderer", () => {
     it("retrieves templates using the query engine when sources are given", async () => {
       await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
-      const template = renderer.templates.get("urn:template")!;
+      const template = renderer.templates.get("@urn:template")!;
       // The template is loaded into the Eta cache under a name derived from its URI.
-      expect(template.name).toBe("@urn:template");
-      // The rdfs#Literal target maps to the "Literal" target type,
-      // and the pattern is built from the pattern binding.
-      expect(template.target).toBe("Literal");
-      expect(template.pattern.source).toBe(".*");
-      // The endpoint comes from the value of the endpoint binding.
-      expect(template.endpoint).toBe("urn:endpoint");
-      // Any other target maps to the "NamedNode" target type.
-      const otherTemplate = renderer.templates.get("urn:other")!;
-      expect(otherTemplate.target).toBe("NamedNode");
-      expect(otherTemplate.endpoint).toBe("urn:endpoint");
+      expect(template.etaName).toBe("@urn:template");
+      // The rdfs#Literal target maps to the "Literal" term type,
+      // and the value pattern is built from the pattern binding.
+      expect(template.termType).toBe("Literal");
+      expect(template.valuePattern.source).toBe(".*");
+      // The endpoint comes from the value of the targetProduct binding.
+      expect(template.sparqlEndpoint).toBe("urn:endpoint");
+      // Any other target maps to the "NamedNode" term type.
+      const otherTemplate = renderer.templates.get("@urn:other")!;
+      expect(otherTemplate.termType).toBe("NamedNode");
+      expect(otherTemplate.sparqlEndpoint).toBe("urn:endpoint");
       // Lower-priority duplicates are ignored.
       expect(renderer.templates.size).toBe(2);
     });
@@ -200,22 +200,22 @@ describe("TemplateRenderer", () => {
   describe("findTemplates", () => {
     it("returns the applicable templates sorted by relevance", () => {
       const template1: ITemplate = {
-        name: "@t1",
-        pattern: /^ab/,
-        endpoint: "https://query.wikidata.org/sparql1",
-        target: "NamedNode",
+        etaName: "@t1",
+        valuePattern: /^ab/,
+        sparqlEndpoint: "https://query.wikidata.org/sparql1",
+        termType: "NamedNode",
       };
       const template2: ITemplate = {
-        name: "@t2",
-        pattern: /^abc/,
-        endpoint: "https://query.wikidata.org/sparql2",
-        target: "NamedNode",
+        etaName: "@t2",
+        valuePattern: /^abc/,
+        sparqlEndpoint: "https://query.wikidata.org/sparql2",
+        termType: "NamedNode",
       };
       const template3: ITemplate = {
-        name: "@t3",
-        pattern: /^xyz$/,
-        endpoint: "https://query.wikidata.org/sparql3",
-        target: "NamedNode",
+        etaName: "@t3",
+        valuePattern: /^xyz$/,
+        sparqlEndpoint: "https://query.wikidata.org/sparql3",
+        termType: "NamedNode",
       };
       renderer.templates.set("t1", template1);
       renderer.templates.set("t2", template2);
@@ -227,20 +227,20 @@ describe("TemplateRenderer", () => {
   describe("calculateRelevance", () => {
     it("returns the length of the regex match for applicable templates", () => {
       const template: ITemplate = {
-        name: "@t1",
-        pattern: /^ab/,
-        endpoint: "https://query.wikidata.org/sparql",
-        target: "NamedNode",
+        etaName: "@t1",
+        valuePattern: /^ab/,
+        sparqlEndpoint: "https://query.wikidata.org/sparql",
+        termType: "NamedNode",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(2);
     });
 
     it("returns negative infinity when the term types do not match", () => {
       const template: ITemplate = {
-        name: "@t1",
-        pattern: /^ab/,
-        endpoint: "https://query.wikidata.org/sparql",
-        target: "Literal",
+        etaName: "@t1",
+        valuePattern: /^ab/,
+        sparqlEndpoint: "https://query.wikidata.org/sparql",
+        termType: "Literal",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abcdef"))).toBe(
         Number.NEGATIVE_INFINITY,
@@ -249,10 +249,10 @@ describe("TemplateRenderer", () => {
 
     it("returns negative infinity when the pattern does not match", () => {
       const template: ITemplate = {
-        name: "@t1",
-        pattern: /^xyz/,
-        endpoint: "https://query.wikidata.org/sparql",
-        target: "NamedNode",
+        etaName: "@t1",
+        valuePattern: /^xyz/,
+        sparqlEndpoint: "https://query.wikidata.org/sparql",
+        termType: "NamedNode",
       };
       expect(renderer.calculateRelevance(template, dataFactory.namedNode("abc"))).toBe(
         Number.NEGATIVE_INFINITY,
@@ -311,17 +311,17 @@ describe("TemplateRenderer", () => {
     it("visualises the term recursively", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         {
-          name: "template content",
-          pattern: /^.*/,
-          endpoint: "https://query.wikidata.org/sparql",
-          target: "NamedNode",
+          etaName: "template content",
+          valuePattern: /^.*/,
+          sparqlEndpoint: "https://query.wikidata.org/sparql",
+          termType: "NamedNode",
         } as ITemplate,
       ]);
       vi.spyOn(renderer, "askBatched").mockResolvedValue(true);
       vi.spyOn(renderer, "selectBatched").mockResolvedValue([] as Record<string, RDF.Term>[]);
       await renderer.loadTemplates([]);
       vi.spyOn(renderer.eta, "renderAsync").mockImplementation(
-        async (template: string, data: object): Promise<string> => {
+        async (template: string | TemplateFunction, data: object): Promise<string> => {
           const context = data as ITemplateContext;
           expect(template).toBe("template content");
           if ((context.term as unknown as RDF.NamedNode).value === "term to visualise") {
@@ -346,16 +346,16 @@ describe("TemplateRenderer", () => {
     it("renderAll renders every applicable template and swallows rendering errors", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         {
-          name: "first",
-          pattern: /^.*/,
-          endpoint: "https://query.wikidata.org/sparql1",
-          target: "NamedNode",
+          etaName: "first",
+          valuePattern: /^.*/,
+          sparqlEndpoint: "https://query.wikidata.org/sparql1",
+          termType: "NamedNode",
         },
         {
-          name: "second",
-          pattern: /^.*/,
-          endpoint: "https://query.wikidata.org/sparql2",
-          target: "NamedNode",
+          etaName: "second",
+          valuePattern: /^.*/,
+          sparqlEndpoint: "https://query.wikidata.org/sparql2",
+          termType: "NamedNode",
         } satisfies ITemplate,
       ]);
       await renderer.loadTemplates([]);
@@ -374,10 +374,10 @@ describe("TemplateRenderer", () => {
     it("visualises errors during template rendering", async () => {
       vi.spyOn(renderer, "findTemplates").mockReturnValue([
         {
-          name: "template content",
-          pattern: /^.*/,
-          endpoint: "https://query.wikidata.org/sparql",
-          target: "NamedNode",
+          etaName: "template content",
+          valuePattern: /^.*/,
+          sparqlEndpoint: "https://query.wikidata.org/sparql",
+          termType: "NamedNode",
         } as ITemplate,
       ]);
       await renderer.loadTemplates([]);
@@ -507,7 +507,7 @@ describe("TemplateRenderer", () => {
       expect(renderer.executeSelect).toHaveBeenCalledOnce();
     });
 
-    it("selectAll executes a select query and converts the stream to an array", async () => {
+    it("selectAll executes a select query and returns the bindings", async () => {
       const rows = [{ s: dataFactory.namedNode("ex:s1") }, { s: dataFactory.namedNode("ex:s2") }];
       vi.spyOn(renderer.endpointFetcher, "fetchBindings").mockResolvedValue(
         createFakeStream(rows) as unknown as NodeJS.ReadableStream,
@@ -655,7 +655,7 @@ describe("TemplateRenderer", () => {
         { query: queryIdentifier, s: dataFactory.namedNode("ex:s2") },
       ]);
       const resolveMock = vi.fn();
-      const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
+      const buffer: QueryBuffer<IBindings[]> = {
         [batchIdentifier.value]: {
           bindings: [],
           endpoint: "https://query.wikidata.org/sparql",
@@ -679,7 +679,7 @@ describe("TemplateRenderer", () => {
       const queryRejection = vi.fn();
       const emptyRejection = vi.fn();
       vi.spyOn(renderer, "selectAll").mockRejectedValue(new Error("Query error"));
-      const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
+      const buffer: QueryBuffer<IBindings[]> = {
         [batchIdentifier.value]: {
           bindings: [],
           endpoint: "https://query.wikidata.org/sparql",
@@ -705,7 +705,7 @@ describe("TemplateRenderer", () => {
       vi.spyOn(renderer, "parseOperation").mockImplementation(() => {
         throw new Error("Parse error");
       });
-      const buffer: QueryBuffer<Record<string, RDF.Term>[]> = {
+      const buffer: QueryBuffer<IBindings[]> = {
         [batchIdentifier.value]: {
           bindings: [],
           endpoint: "https://query.wikidata.org/sparql",
