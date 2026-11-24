@@ -1,5 +1,6 @@
 import type * as RDF from "@rdfjs/types";
 import MurmurHash3 from "imurmurhash";
+import { LRUCache } from "lru-cache";
 import { DataFactory } from "rdf-data-factory";
 import { QueryEngine } from "@comunica/query-sparql";
 import type { IQueryEngine, QuerySourceUnidentified } from "@comunica/types";
@@ -19,8 +20,22 @@ import type {
   QueryBuffer,
 } from "./types";
 
+const templateQuery = `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX schema: <https://schema.org/>
+
+SELECT DISTINCT ?template ?target ?targetProduct ?pattern ?text WHERE {
+  ?template a schema:SoftwareSourceCode .
+  ?template schema:programmingLanguage "Eta" .
+  ?template schema:target ?target .
+  ?template schema:targetProduct ?targetProduct .
+  ?template schema:pattern ?pattern .
+  ?template schema:text ?text .
+  ?template schema:position ?position .
+} ORDER BY DESC(?position)` as const;
+
 class TemplateRenderer implements ITemplateRenderer {
   protected readonly eta: Eta;
+  protected readonly cache: LRUCache<string, Promise<string>>;
   protected readonly queryEngine: IQueryEngine;
   protected readonly endpointFetcher: SparqlEndpointFetcher;
   protected readonly dataFactory: DataFactory;
@@ -38,6 +53,7 @@ class TemplateRenderer implements ITemplateRenderer {
 
   public constructor(options: ITemplateRendererOptions) {
     this.eta = new Eta(options.etaOptions ?? { useWith: true, cache: true });
+    this.cache = new LRUCache<string, Promise<string>>({ max: options.cacheSize ?? 1_000 });
     this.dataFactory = options.dataFactory ?? new DataFactory();
     this.algebraFactory = options.algebraFactory ?? new AlgebraFactory(this.dataFactory);
     this.queryEngine = options.queryEngine ?? new QueryEngine();
@@ -58,49 +74,40 @@ class TemplateRenderer implements ITemplateRenderer {
   }
 
   /**
-   * Collects all templates from the specified SPARQL endpoint.
-   * @param endpoint The SPARQL endpoint to query.
+   * Collect all templates from the specified sources, and load them into the Eta cache.
+   * Previously collected templates are erased before new ones are loaded.
+   * @param sources The sources to query for templates.
    * @param signal Optional signal to stop template loading.
-   * @returns The number of templates discovered.
    */
   public async loadTemplates(
     sources: QuerySourceUnidentified[],
     signal?: AbortSignal,
   ): Promise<void> {
+    this.cache.clear();
+    this.eta.templatesAsync.reset();
     this.templates.clear();
-    this.eta.filepathCache = {};
-    const query = `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX schema: <https://schema.org/>
-
-SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
-  ?template a schema:SoftwareSourceCode .
-  ?template schema:programmingLanguage "Eta" .
-  ?template schema:target ?target .
-  ?template schema:targetProduct ?endpoint .
-  ?template schema:pattern ?pattern .
-  ?template schema:text ?text .
-  ?template schema:position ?priority .
-} ORDER BY DESC(?priority)`;
     if (sources.length > 0) {
-      const bindingsStream = await this.queryEngine.queryBindings(query, { sources });
-      signal?.addEventListener("abort", () => bindingsStream.destroy());
+      const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
+      const abortListener = () => bindingsStream.destroy();
+      signal?.addEventListener("abort", abortListener, { once: true });
       for await (const bindings of bindingsStream) {
-        const template = (bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value;
-        if (!this.templates.has(template)) {
-          const name = `@${template}`;
-          this.eta.loadTemplate(name, (bindings.get("text") as RDF.Literal).value, { async: true });
-          this.templates.set(template, {
-            name,
-            pattern: new RegExp((bindings.get("pattern") as RDF.Literal).value, "u"),
-            endpoint: (bindings.get("endpoint") as RDF.NamedNode).value,
-            target:
-              (bindings.get("target") as RDF.NamedNode).value ===
-              "http://www.w3.org/2000/01/rdf-schema#Literal"
-                ? "Literal"
-                : "NamedNode",
+        const etaName = `@${(bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value}`;
+        if (!this.templates.has(etaName)) {
+          const text = (bindings.get("text") as RDF.Literal).value;
+          const pattern = (bindings.get("pattern") as RDF.Literal).value;
+          const target = (bindings.get("target") as RDF.NamedNode).value;
+          const targetProduct = (bindings.get("targetProduct") as RDF.NamedNode).value;
+          this.eta.loadTemplate(etaName, text, { async: true });
+          this.templates.set(etaName, {
+            etaName,
+            valuePattern: new RegExp(pattern, "u"),
+            sparqlEndpoint: targetProduct,
+            termType:
+              target === "http://www.w3.org/2000/01/rdf-schema#Literal" ? "Literal" : "NamedNode",
           });
         }
       }
+      signal?.removeEventListener("abort", abortListener);
     }
   }
 
@@ -109,15 +116,18 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
    * @param term The term to find templates for.
    * @returns The templates, sorted by relevance.
    */
-  protected findTemplates(term: RDF.Term): ITemplate[] {
+  protected findTemplates(term: RDF.Term | undefined): ITemplate[] {
     const templatesWithRelevance: { template: ITemplate; relevance: number }[] = [];
-    for (const template of this.templates.values()) {
-      const relevance = this.calculateRelevance(template, term);
-      if (relevance >= 0) {
-        templatesWithRelevance.push({ template, relevance });
+    if (term) {
+      for (const template of this.templates.values()) {
+        const relevance = this.calculateRelevance(template, term);
+        if (relevance >= 0) {
+          templatesWithRelevance.push({ template, relevance });
+        }
       }
+      templatesWithRelevance.sort((a, b) => b.relevance - a.relevance);
     }
-    return templatesWithRelevance.sort((a, b) => b.relevance - a.relevance).map((t) => t.template);
+    return templatesWithRelevance.map((t) => t.template);
   }
 
   /**
@@ -127,8 +137,8 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
    * @returns The relevance as a numeric value, where higher is more relevant.
    */
   protected calculateRelevance(template: ITemplate, term: RDF.Term): number {
-    if (term.termType === template.target) {
-      const match = template.pattern.exec(term.value);
+    if (term.termType === template.termType) {
+      const match = template.valuePattern.exec(term.value);
       if (match) {
         return match[0].length;
       }
@@ -144,54 +154,57 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
     return this.sparqlGenerator.generate(toAst(operation));
   }
 
-  protected generateTemplateContext(term: RDF.Term, endpoint: string): ITemplateContext {
-    return {
-      term,
-      queryAsk: (query, bindings) => this.askBatched(query, endpoint, bindings ?? []),
-      querySelect: async (query, bindings) => {
-        const outputBindings = await this.selectBatched(query, endpoint, bindings ?? []);
-        return outputBindings.at(0);
-      },
-      querySelectAll: async (query, bindings) => {
-        return await this.selectBatched(query, endpoint, bindings ?? []);
-      },
-      visualiseTerm: (term) => this.render(term),
-    };
+  protected async renderWithTemplate(term: RDF.Term, template: ITemplate): Promise<string> {
+    const termHash = this.hashObject({ term, template: template.etaName });
+    let renderResult = this.cache.get(termHash);
+    if (renderResult === undefined) {
+      const context: ITemplateContext = {
+        term,
+        queryAsk: (query, bindings) => {
+          return this.askBatched(query, template.sparqlEndpoint, bindings ?? []);
+        },
+        querySelect: async (query, bindings) => {
+          const allBindings = await this.selectBatched(
+            query,
+            template.sparqlEndpoint,
+            bindings ?? [],
+          );
+          return allBindings.at(0);
+        },
+        querySelectAll: (query, bindings) => {
+          return this.selectBatched(query, template.sparqlEndpoint, bindings ?? []);
+        },
+        visualiseTerm: (term) => {
+          return this.render(term);
+        },
+      };
+      renderResult = new Promise<string>((resolve) =>
+        this.eta
+          .renderAsync(template.etaName, context)
+          .then((html) => resolve(html))
+          .catch((ex: unknown) => resolve(`<pre class="error">${ex}</pre>`)),
+      );
+      this.cache.set(termHash, renderResult);
+    }
+    return renderResult;
   }
 
   public async render(term: RDF.Term | undefined): Promise<string> {
-    if (term && this.eta) {
-      const template = this.findTemplates(term).at(0);
-      if (template) {
-        try {
-          const context = this.generateTemplateContext(term, template.endpoint);
-          return await this.eta.renderAsync(template.name, context);
-        } catch (error: unknown) {
-          return `<pre class="error">${error}</pre>`;
-        }
-      }
-    }
-    return `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
+    const template = this.findTemplates(term).at(0);
+    return term && template
+      ? this.renderWithTemplate(term, template)
+      : `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
   }
 
   public async renderAll(term: RDF.Term | undefined): Promise<string[]> {
-    if (term && this.eta) {
-      const eta = this.eta;
+    if (term) {
       const renderPromises: Promise<string>[] = [];
       for (const template of this.findTemplates(term)) {
-        const context = this.generateTemplateContext(term, template.endpoint);
-        renderPromises.push(
-          new Promise((resolve) =>
-            eta
-              .renderAsync(template.name, context)
-              .then((html) => resolve(html))
-              .catch((error: unknown) => resolve(`<pre class="error">${error}</pre>`)),
-          ),
-        );
+        renderPromises.push(this.renderWithTemplate(term, template));
       }
       return await Promise.all(renderPromises);
     }
-    return [`<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`];
+    return [`<pre class="error">${JSON.stringify(term)}</pre>`];
   }
 
   protected bindingsToValues(bindings: IBindings[]): Algebra.Values {
@@ -201,6 +214,30 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
       ),
       bindings as Record<string, RDF.NamedNode | RDF.Literal>[],
     );
+  }
+
+  /**
+   * Calculate the hash of the given object's JSON representation.
+   */
+  protected hashObject(input: unknown): string {
+    return MurmurHash3(JSON.stringify(input)).result().toString(16);
+  }
+
+  /**
+   * Sort the keys of the object.
+   */
+  protected sortObjectKeys(input: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(input).sort((t1, t2) => t1[0].localeCompare(t2[0])));
+  }
+
+  /**
+   * Sort the objects based on their JSON representation.
+   */
+  protected sortObjects(input: unknown[]): unknown[] {
+    return input
+      .map((o) => ({ o, s: JSON.stringify(o) }))
+      .sort((o1, o2) => o1.s.localeCompare(o2.s))
+      .map((o) => o.o);
   }
 
   /**
@@ -218,13 +255,9 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
       query,
       endpoint,
       // Ensure the binding objects always sorted identically
-      bindings: bindings
-        .map((b) =>
-          Object.fromEntries(Object.entries(b).sort((t1, t2) => t1[0].localeCompare(t2[0]))),
-        )
-        .sort((b1, b2) => JSON.stringify(b1).localeCompare(JSON.stringify(b2))),
+      bindings: this.sortObjects(bindings.map((b) => this.sortObjectKeys(b))),
     });
-    const hash = MurmurHash3(value).result().toString(16);
+    const hash = this.hashObject(value);
     return this.dataFactory.namedNode(`urn:query:${hash}`);
   }
 
@@ -244,7 +277,7 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
       endpoint,
       bindings: [...new Set(bindings.flatMap((b) => Object.keys(b)))].sort(),
     });
-    const hash = MurmurHash3(value).result().toString(16);
+    const hash = this.hashObject(value);
     return this.dataFactory.namedNode(`urn:batch:${hash}`);
   }
 
@@ -469,6 +502,12 @@ SELECT DISTINCT ?template ?target ?pattern ?text ?endpoint WHERE {
 }
 
 interface ITemplateRendererOptions {
+  /**
+   * The size of the render output cache, that attempts to avoid repeated rendering
+   * of the same term by caching the results. This is an LRU cache.
+   * @default {1000}
+   */
+  cacheSize?: number;
   /**
    * The window in milliseconds for every query batch.
    */

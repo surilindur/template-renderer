@@ -38,6 +38,7 @@
     "eta": "^4.0.0",
     "fetch-sparql-endpoint": "^7.0.0",
     "imurmurhash": "^0.1.0",
+    "lru-cache": "^11.0.0",
     "rdf-data-factory": "^2.0.0"
   },
   "devDependencies": {

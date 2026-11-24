@@ -4360,6 +4360,7 @@ __metadata:
     eta: "npm:^4.0.0"
     fetch-sparql-endpoint: "npm:^7.0.0"
     imurmurhash: "npm:^0.1.0"
+    lru-cache: "npm:^11.0.0"
     oxfmt: "npm:^0.79.0"
     oxlint: "npm:^1.0.0"
     playwright: "npm:^1.0.0"
@@ -7097,7 +7098,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lru-cache@npm:^11.2.2":
+"lru-cache@npm:^11.0.0, lru-cache@npm:^11.2.2":
   version: 11.5.3
   resolution: "lru-cache@npm:11.5.3"
   checksum: 10/824394f43827de37e961e9e344d4f0d2afb0347106ddafae620d0035c36337bc64e64cddbc17f6c630a73c9db34cf3f81211e3d43699a32e9f3641f391415b82
