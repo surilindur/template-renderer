@@ -130,7 +130,7 @@ class TemplateRenderer implements ITemplateRenderer {
           return "NamedNode";
       }
     }
-    throw new Error(`Unsupported template target ${target}`);
+    throw new Error(`Unsupported template target ${JSON.stringify(target)}`);
   }
 
   /**

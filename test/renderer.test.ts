@@ -206,13 +206,13 @@ describe("TemplateRenderer", () => {
     it("throws for targets that are not a recognized shacl term type", () => {
       expect(() =>
         renderer.determineTemplateTermType(dataFactory.namedNode("http://www.w3.org/1999-02-22-rdf-syntax-ns#type")),
-      ).toThrow(/Unsupported template target/);
+      ).toThrow(/Unsupported template target {"termType":"NamedNode","value":"http:\/\/www\.w3\.org\/1999-02-22-rdf-syntax-ns#type"}/);
     });
 
     it("throws for non-NamedNode targets", () => {
       expect(() =>
         renderer.determineTemplateTermType(dataFactory.blankNode("b1")),
-      ).toThrow(/Unsupported template target/);
+      ).toThrow(/Unsupported template target {"termType":"BlankNode","value":"b1"}/);
     });
   });
 
