@@ -1,5 +1,6 @@
 import type * as RDF from "@rdfjs/types";
 import MurmurHash3 from "imurmurhash";
+import { LRUCache } from "lru-cache";
 import { DataFactory } from "rdf-data-factory";
 import { QueryEngine } from "@comunica/query-sparql";
 import type { IQueryEngine, QuerySourceUnidentified } from "@comunica/types";
@@ -34,6 +35,7 @@ SELECT DISTINCT ?template ?target ?targetProduct ?pattern ?text WHERE {
 
 class TemplateRenderer implements ITemplateRenderer {
   protected readonly eta: Eta;
+  protected readonly cache: LRUCache<string, Promise<string>>;
   protected readonly queryEngine: IQueryEngine;
   protected readonly endpointFetcher: SparqlEndpointFetcher;
   protected readonly dataFactory: DataFactory;
@@ -51,6 +53,7 @@ class TemplateRenderer implements ITemplateRenderer {
 
   public constructor(options: ITemplateRendererOptions) {
     this.eta = new Eta(options.etaOptions ?? { useWith: true, cache: true });
+    this.cache = new LRUCache<string, Promise<string>>({ max: options.cacheSize ?? 1_000 });
     this.dataFactory = options.dataFactory ?? new DataFactory();
     this.algebraFactory = options.algebraFactory ?? new AlgebraFactory(this.dataFactory);
     this.queryEngine = options.queryEngine ?? new QueryEngine();
@@ -80,11 +83,13 @@ class TemplateRenderer implements ITemplateRenderer {
     sources: QuerySourceUnidentified[],
     signal?: AbortSignal,
   ): Promise<void> {
+    this.cache.clear();
     this.eta.templatesAsync.reset();
     this.templates.clear();
     if (sources.length > 0) {
       const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
-      signal?.addEventListener("abort", () => bindingsStream.destroy());
+      const abortListener = () => bindingsStream.destroy();
+      signal?.addEventListener("abort", abortListener, { once: true });
       for await (const bindings of bindingsStream) {
         const etaName = `@${(bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value}`;
         if (!this.templates.has(etaName)) {
@@ -102,6 +107,7 @@ class TemplateRenderer implements ITemplateRenderer {
           });
         }
       }
+      signal?.removeEventListener("abort", abortListener);
     }
   }
 
@@ -110,15 +116,18 @@ class TemplateRenderer implements ITemplateRenderer {
    * @param term The term to find templates for.
    * @returns The templates, sorted by relevance.
    */
-  protected findTemplates(term: RDF.Term): ITemplate[] {
+  protected findTemplates(term: RDF.Term | undefined): ITemplate[] {
     const templatesWithRelevance: { template: ITemplate; relevance: number }[] = [];
-    for (const template of this.templates.values()) {
-      const relevance = this.calculateRelevance(template, term);
-      if (relevance >= 0) {
-        templatesWithRelevance.push({ template, relevance });
+    if (term) {
+      for (const template of this.templates.values()) {
+        const relevance = this.calculateRelevance(template, term);
+        if (relevance >= 0) {
+          templatesWithRelevance.push({ template, relevance });
+        }
       }
+      templatesWithRelevance.sort((a, b) => b.relevance - a.relevance);
     }
-    return templatesWithRelevance.sort((a, b) => b.relevance - a.relevance).map((t) => t.template);
+    return templatesWithRelevance.map((t) => t.template);
   }
 
   /**
@@ -145,49 +154,57 @@ class TemplateRenderer implements ITemplateRenderer {
     return this.sparqlGenerator.generate(toAst(operation));
   }
 
-  protected generateTemplateContext(term: RDF.Term, endpoint: string): ITemplateContext {
-    return {
-      term,
-      queryAsk: (query, bindings) => this.askBatched(query, endpoint, bindings ?? []),
-      querySelect: async (query, bindings) =>
-        (await this.selectBatched(query, endpoint, bindings ?? [])).at(0),
-      querySelectAll: (query, bindings) => this.selectBatched(query, endpoint, bindings ?? []),
-      visualiseTerm: (term) => this.render(term),
-    };
+  protected async renderWithTemplate(term: RDF.Term, template: ITemplate): Promise<string> {
+    const termHash = this.hashObject({ term, template: template.etaName });
+    let renderResult = this.cache.get(termHash);
+    if (renderResult === undefined) {
+      const context: ITemplateContext = {
+        term,
+        queryAsk: (query, bindings) => {
+          return this.askBatched(query, template.sparqlEndpoint, bindings ?? []);
+        },
+        querySelect: async (query, bindings) => {
+          const allBindings = await this.selectBatched(
+            query,
+            template.sparqlEndpoint,
+            bindings ?? [],
+          );
+          return allBindings.at(0);
+        },
+        querySelectAll: (query, bindings) => {
+          return this.selectBatched(query, template.sparqlEndpoint, bindings ?? []);
+        },
+        visualiseTerm: (term) => {
+          return this.render(term);
+        },
+      };
+      renderResult = new Promise<string>((resolve) =>
+        this.eta
+          .renderAsync(template.etaName, context)
+          .then((html) => resolve(html))
+          .catch((ex: unknown) => resolve(`<pre class="error">${ex}</pre>`)),
+      );
+      this.cache.set(termHash, renderResult);
+    }
+    return renderResult;
   }
 
   public async render(term: RDF.Term | undefined): Promise<string> {
-    if (term) {
-      const template = this.findTemplates(term).at(0);
-      if (template) {
-        try {
-          const context = this.generateTemplateContext(term, template.sparqlEndpoint);
-          return await this.eta.renderAsync(template.etaName, context);
-        } catch (error: unknown) {
-          return `<pre class="error">${error}</pre>`;
-        }
-      }
-    }
-    return `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
+    const template = this.findTemplates(term).at(0);
+    return term && template
+      ? this.renderWithTemplate(term, template)
+      : `<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`;
   }
 
   public async renderAll(term: RDF.Term | undefined): Promise<string[]> {
     if (term) {
       const renderPromises: Promise<string>[] = [];
       for (const template of this.findTemplates(term)) {
-        const context = this.generateTemplateContext(term, template.sparqlEndpoint);
-        renderPromises.push(
-          new Promise((resolve) =>
-            this.eta
-              .renderAsync(template.etaName, context)
-              .then((html) => resolve(html))
-              .catch((error: unknown) => resolve(`<pre class="error">${error}</pre>`)),
-          ),
-        );
+        renderPromises.push(this.renderWithTemplate(term, template));
       }
       return await Promise.all(renderPromises);
     }
-    return [`<pre class="error">${JSON.stringify(term, undefined, 2)}</pre>`];
+    return [`<pre class="error">${JSON.stringify(term)}</pre>`];
   }
 
   protected bindingsToValues(bindings: IBindings[]): Algebra.Values {
@@ -197,6 +214,30 @@ class TemplateRenderer implements ITemplateRenderer {
       ),
       bindings as Record<string, RDF.NamedNode | RDF.Literal>[],
     );
+  }
+
+  /**
+   * Calculate the hash of the given object's JSON representation.
+   */
+  protected hashObject(input: unknown): string {
+    return MurmurHash3(JSON.stringify(input)).result().toString(16);
+  }
+
+  /**
+   * Sort the keys of the object.
+   */
+  protected sortObjectKeys(input: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(input).sort((t1, t2) => t1[0].localeCompare(t2[0])));
+  }
+
+  /**
+   * Sort the objects based on their JSON representation.
+   */
+  protected sortObjects(input: unknown[]): unknown[] {
+    return input
+      .map((o) => ({ o, s: JSON.stringify(o) }))
+      .sort((o1, o2) => o1.s.localeCompare(o2.s))
+      .map((o) => o.o);
   }
 
   /**
@@ -214,13 +255,9 @@ class TemplateRenderer implements ITemplateRenderer {
       query,
       endpoint,
       // Ensure the binding objects always sorted identically
-      bindings: bindings
-        .map((b) =>
-          Object.fromEntries(Object.entries(b).sort((t1, t2) => t1[0].localeCompare(t2[0]))),
-        )
-        .sort((b1, b2) => JSON.stringify(b1).localeCompare(JSON.stringify(b2))),
+      bindings: this.sortObjects(bindings.map((b) => this.sortObjectKeys(b))),
     });
-    const hash = MurmurHash3(value).result().toString(16);
+    const hash = this.hashObject(value);
     return this.dataFactory.namedNode(`urn:query:${hash}`);
   }
 
@@ -240,7 +277,7 @@ class TemplateRenderer implements ITemplateRenderer {
       endpoint,
       bindings: [...new Set(bindings.flatMap((b) => Object.keys(b)))].sort(),
     });
-    const hash = MurmurHash3(value).result().toString(16);
+    const hash = this.hashObject(value);
     return this.dataFactory.namedNode(`urn:batch:${hash}`);
   }
 
@@ -465,6 +502,12 @@ class TemplateRenderer implements ITemplateRenderer {
 }
 
 interface ITemplateRendererOptions {
+  /**
+   * The size of the render output cache, that attempts to avoid repeated rendering
+   * of the same term by caching the results. This is an LRU cache.
+   * @default {1000}
+   */
+  cacheSize?: number;
   /**
    * The window in milliseconds for every query batch.
    */

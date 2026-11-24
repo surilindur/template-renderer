@@ -180,9 +180,15 @@ describe("TemplateRenderer", () => {
 
     it("stops loading templates when the abort signal fires", async () => {
       const controller = new AbortController();
+      // The stream stalls until destroy() is called, so the abort listener has
+      // not yet been removed when the signal fires.
+      let resolveDestroyed!: () => void;
+      const destroyed = new Promise<void>((resolve) => (resolveDestroyed = resolve));
       const bindingsStream = {
-        [Symbol.asyncIterator]: function* (): IterableIterator<RDF.Bindings> {},
-        destroy: vi.fn(),
+        [Symbol.asyncIterator]: async function* (): AsyncGenerator<RDF.Bindings> {
+          await destroyed;
+        },
+        destroy: vi.fn(resolveDestroyed),
       };
       vi.spyOn(queryEngine, "queryBindings").mockResolvedValue(
         bindingsStream as unknown as BindingsStream,
@@ -360,15 +366,29 @@ describe("TemplateRenderer", () => {
       ]);
       await renderer.loadTemplates([]);
       const error = new Error("Template rendering error");
-      vi.spyOn(renderer.eta, "renderAsync").mockImplementation(async (template) => {
-        if (template === "first") {
-          throw error;
-        }
-        return "<p>second</p>";
-      });
-      await expect(renderer.renderAll(dataFactory.namedNode("term to visualise"))).resolves.toEqual(
-        [`<pre class="error">${String(error)}</pre>`, "<p>second</p>"],
-      );
+      const renderSpy = vi
+        .spyOn(renderer.eta, "renderAsync")
+        .mockImplementation(async (template) => {
+          if (template === "first") {
+            throw error;
+          }
+          return "<p>second</p>";
+        });
+      await expect(
+        renderer.renderAll(dataFactory.namedNode("term to visualise")),
+      ).resolves.toEqual([`<pre class="error">${String(error)}</pre>`, "<p>second</p>"]);
+      // Render results are cached per term and template: a re-render of the same term
+      // resolves from the cache without invoking Eta again.
+      await expect(
+        renderer.renderAll(dataFactory.namedNode("term to visualise")),
+      ).resolves.toEqual([`<pre class="error">${String(error)}</pre>`, "<p>second</p>"]);
+      expect(renderSpy).toHaveBeenCalledTimes(2);
+      // A new term misses the cache, so both templates are rendered fresh.
+      await expect(renderer.renderAll(dataFactory.namedNode("other term"))).resolves.toEqual([
+        `<pre class="error">${String(error)}</pre>`,
+        "<p>second</p>",
+      ]);
+      expect(renderSpy).toHaveBeenCalledTimes(4);
     });
 
     it("visualises errors during template rendering", async () => {
