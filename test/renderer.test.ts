@@ -14,6 +14,7 @@ describe("TemplateRenderer", () => {
   type TestTemplateRenderer = TemplateRenderer & {
     readonly eta: Eta;
     calculateRelevance(template: ITemplate, term: RDF.Term): number;
+    determineTemplateTermType(target: RDF.Term): RDF.Term["termType"];
     parseOperation(op: string): Algebra.Operation;
     serializeOperation(operation: Algebra.Operation): string;
     bindingsToValues(bindings: Record<string, RDF.NamedNode | RDF.Literal>[]): Algebra.Values;
@@ -70,48 +71,40 @@ describe("TemplateRenderer", () => {
             ["template", dataFactory.namedNode("urn:template")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>example</p>")],
-            ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
+            ["target", dataFactory.namedNode("http://www.w3.org/ns/shacl#Literal")],
             ["targetProduct", dataFactory.namedNode("urn:endpoint")],
-            [
-              "priority",
-              dataFactory.literal(
-                "10",
-                dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
-              ),
-            ],
-            ["endpoint", dataFactory.literal("urn:endpoint")],
           ]),
-          // A NamedNode-typed template, exercising the non-Literal target branch
+          // A NamedNode-typed template, exercising the IRI target branch
           new Map<string, RDF.Term>([
             ["template", dataFactory.namedNode("urn:other")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>named</p>")],
-            ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Class")],
+            ["target", dataFactory.namedNode("http://www.w3.org/ns/shacl#IRI")],
             ["targetProduct", dataFactory.namedNode("urn:endpoint")],
-            [
-              "priority",
-              dataFactory.literal(
-                "5",
-                dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
-              ),
-            ],
-            ["endpoint", dataFactory.literal("urn:endpoint")],
           ]),
-          // A lower-priority duplicate, to exercise template deduplication
+          // Another NamedNode-typed template, exercising the append-to-existing branch
+          new Map<string, RDF.Term>([
+            ["template", dataFactory.namedNode("urn:more")],
+            ["pattern", dataFactory.literal("^b")],
+            ["text", dataFactory.literal("<p>another named</p>")],
+            ["target", dataFactory.namedNode("http://www.w3.org/ns/shacl#IRI")],
+            ["targetProduct", dataFactory.namedNode("urn:endpoint")],
+          ]),
+          // A BlankNode-typed template, exercising the BlankNode target branch
+          new Map<string, RDF.Term>([
+            ["template", dataFactory.namedNode("urn:blank")],
+            ["pattern", dataFactory.literal(".*")],
+            ["text", dataFactory.literal("<p>blank</p>")],
+            ["target", dataFactory.namedNode("http://www.w3.org/ns/shacl#BlankNode")],
+            ["targetProduct", dataFactory.namedNode("urn:endpoint")],
+          ]),
+          // A duplicate with the same template name, to exercise deduplication
           new Map<string, RDF.Term>([
             ["template", dataFactory.namedNode("urn:template")],
             ["pattern", dataFactory.literal(".*")],
             ["text", dataFactory.literal("<p>duplicate</p>")],
-            ["target", dataFactory.namedNode("http://www.w3.org/2000/01/rdf-schema#Literal")],
+            ["target", dataFactory.namedNode("http://www.w3.org/ns/shacl#Literal")],
             ["targetProduct", dataFactory.namedNode("urn:endpoint")],
-            [
-              "priority",
-              dataFactory.literal(
-                "0",
-                dataFactory.namedNode("http://www.w3.org/2001/XMLSchema#integer"),
-              ),
-            ],
-            ["endpoint", dataFactory.literal("urn:endpoint")],
           ]),
         ]),
       ),
@@ -146,21 +139,27 @@ describe("TemplateRenderer", () => {
     it("retrieves templates using the query engine when sources are given", async () => {
       await expect(renderer.loadTemplates(["https://localhost/sparql"])).resolves.not.toThrow();
       expect(queryEngine.queryBindings).toHaveBeenCalledOnce();
-      const template = renderer.templates.get("@urn:template")!;
+      // The templates map is keyed by the term type of the templates.
+      const [template] = renderer.templates.get("Literal")!;
       // The template is loaded into the Eta cache under a name derived from its URI.
       expect(template.etaName).toBe("@urn:template");
-      // The rdfs#Literal target maps to the "Literal" term type,
+      // The shacl#Literal target maps to the "Literal" term type,
       // and the value pattern is built from the pattern binding.
       expect(template.termType).toBe("Literal");
       expect(template.valuePattern.source).toBe(".*");
       // The endpoint comes from the value of the targetProduct binding.
       expect(template.sparqlEndpoint).toBe("urn:endpoint");
-      // Any other target maps to the "NamedNode" term type.
-      const otherTemplate = renderer.templates.get("@urn:other")!;
+      // The shacl#IRI target maps to the "NamedNode" term type, and both IRI
+      // templates share the same map entry.
+      const [otherTemplate, moreTemplate] = renderer.templates.get("NamedNode")!;
       expect(otherTemplate.termType).toBe("NamedNode");
       expect(otherTemplate.sparqlEndpoint).toBe("urn:endpoint");
-      // Lower-priority duplicates are ignored.
-      expect(renderer.templates.size).toBe(2);
+      expect(moreTemplate.etaName).toBe("@urn:more");
+      // The shacl#BlankNode target maps to the "BlankNode" term type.
+      const [blankTemplate] = renderer.templates.get("BlankNode")!;
+      expect(blankTemplate.termType).toBe("BlankNode");
+      // Duplicates with an already-seen template name are ignored.
+      expect(renderer.templates.size).toBe(3);
     });
 
     it("returns no templates when no sources are given", async () => {
@@ -203,6 +202,20 @@ describe("TemplateRenderer", () => {
     });
   });
 
+  describe("determineTemplateTermType", () => {
+    it("throws for targets that are not a recognized shacl term type", () => {
+      expect(() =>
+        renderer.determineTemplateTermType(dataFactory.namedNode("http://www.w3.org/1999-02-22-rdf-syntax-ns#type")),
+      ).toThrow(/Unsupported template target/);
+    });
+
+    it("throws for non-NamedNode targets", () => {
+      expect(() =>
+        renderer.determineTemplateTermType(dataFactory.blankNode("b1")),
+      ).toThrow(/Unsupported template target/);
+    });
+  });
+
   describe("findTemplates", () => {
     it("returns the applicable templates sorted by relevance", () => {
       const template1: ITemplate = {
@@ -223,9 +236,8 @@ describe("TemplateRenderer", () => {
         sparqlEndpoint: "https://query.wikidata.org/sparql3",
         termType: "NamedNode",
       };
-      renderer.templates.set("t1", template1);
-      renderer.templates.set("t2", template2);
-      renderer.templates.set("t3", template3);
+      // The templates map is keyed by term type.
+      renderer.templates.set("NamedNode", [template1, template2, template3]);
       expect(renderer.findTemplates(dataFactory.namedNode("abc"))).toEqual([template2, template1]);
     });
   });
