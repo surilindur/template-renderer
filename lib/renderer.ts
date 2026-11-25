@@ -347,6 +347,9 @@ class TemplateRenderer implements ITemplateRenderer {
           resolutions: { [queryIdentifier.value]: [resolve] },
           rejections: { [queryIdentifier.value]: [reject] },
         };
+        // The timeout is set when the first entry is added into the buffer.
+        // This ensures only one timeout is created per-buffer, and the countdown
+        // begins when the buffer is created, without further updates to it.
         setTimeout(() => executor(batchIdentifier), this.batchWindowMilliseconds);
       }
     });
@@ -378,11 +381,10 @@ class TemplateRenderer implements ITemplateRenderer {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    let selectOperation: Algebra.Operation;
     try {
       const askOperation = this.parseOperation(batch.query);
 
-      selectOperation = algebraUtils.mapOperation(askOperation, {
+      const selectOperation = algebraUtils.mapOperation(askOperation, {
         ask: {
           preVisitor: () => ({ shortcut: true, copy: false }),
           transform: (_, op) =>
@@ -395,17 +397,7 @@ class TemplateRenderer implements ITemplateRenderer {
             ),
         },
       }) as Algebra.Operation;
-    } catch (error: unknown) {
-      // Send the error to all queries
-      for (const rejections of Object.values(batch.rejections)) {
-        for (const rejection of rejections) {
-          rejection(error);
-        }
-      }
-      return;
-    }
 
-    try {
       const queryString = this.serializeOperation(selectOperation);
       const bindingsArray = await this.selectAll(queryString, batch.endpoint);
 
@@ -442,11 +434,10 @@ class TemplateRenderer implements ITemplateRenderer {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    let selectOperation: Algebra.Operation;
     try {
       const selectOperationOriginal = this.parseOperation(batch.query);
 
-      selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
+      const selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
         project: {
           preVisitor: () => ({ shortcut: true, copy: false }),
           transform: (_copy, op) =>
@@ -456,17 +447,7 @@ class TemplateRenderer implements ITemplateRenderer {
             ),
         },
       }) as Algebra.Operation;
-    } catch (error: unknown) {
-      // Send the error to all queries
-      for (const rejections of Object.values(batch.rejections)) {
-        for (const rejection of rejections) {
-          rejection(error);
-        }
-      }
-      return;
-    }
 
-    try {
       const queryString = this.serializeOperation(selectOperation);
       const bindingsArray = await this.selectAll(queryString, batch.endpoint);
       const bindingsByQuery: Record<string, IBindings[]> = {};
