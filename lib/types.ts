@@ -96,7 +96,7 @@ interface ITemplate {
    * The type of RDF term this template can be applied to.
    * This helps avoid running named node templates on literals, for example.
    */
-  termType: RDF.NamedNode["termType"] | RDF.Literal["termType"];
+  termType: RDF.Term["termType"];
 }
 
 export type { QueryBatch, QueryBuffer, ITemplateRenderer, ITemplateContext, ITemplate };

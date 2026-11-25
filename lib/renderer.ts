@@ -41,7 +41,7 @@ class TemplateRenderer implements ITemplateRenderer {
   protected readonly dataFactory: DataFactory;
   protected readonly algebraFactory: AlgebraFactory;
 
-  public readonly templates: Map<string, ITemplate>;
+  public readonly templates: Map<ITemplate["termType"], ITemplate[]>;
 
   protected readonly selectBuffer: QueryBuffer<IBindings[]>;
   protected readonly askBuffer: QueryBuffer<boolean>;
@@ -87,28 +87,50 @@ class TemplateRenderer implements ITemplateRenderer {
     this.eta.templatesAsync.reset();
     this.templates.clear();
     if (sources.length > 0) {
+      const processedTemplates = new Set<string>();
       const bindingsStream = await this.queryEngine.queryBindings(templateQuery, { sources });
       const abortListener = () => bindingsStream.destroy();
       signal?.addEventListener("abort", abortListener, { once: true });
       for await (const bindings of bindingsStream) {
         const etaName = `@${(bindings.get("template") as RDF.NamedNode | RDF.BlankNode).value}`;
-        if (!this.templates.has(etaName)) {
+        if (!processedTemplates.has(etaName)) {
+          processedTemplates.add(etaName);
           const text = (bindings.get("text") as RDF.Literal).value;
           const pattern = (bindings.get("pattern") as RDF.Literal).value;
-          const target = (bindings.get("target") as RDF.NamedNode).value;
+          const target = bindings.get("target") as RDF.Term;
           const targetProduct = (bindings.get("targetProduct") as RDF.NamedNode).value;
+          const termType = this.determineTemplateTermType(target);
           this.eta.loadTemplate(etaName, text, { async: true });
-          this.templates.set(etaName, {
+          const template: ITemplate = {
             etaName,
             valuePattern: new RegExp(pattern, "u"),
             sparqlEndpoint: targetProduct,
-            termType:
-              target === "http://www.w3.org/2000/01/rdf-schema#Literal" ? "Literal" : "NamedNode",
-          });
+            termType,
+          };
+          let templateArray = this.templates.get(template.termType);
+          if (templateArray !== undefined) {
+            templateArray.push(template);
+          } else {
+            this.templates.set(template.termType, [template]);
+          }
         }
       }
       signal?.removeEventListener("abort", abortListener);
     }
+  }
+
+  protected determineTemplateTermType(target: RDF.Term): RDF.Term["termType"] {
+    if (target.termType === "NamedNode") {
+      switch (target.value) {
+        case "http://www.w3.org/ns/shacl#Literal":
+          return "Literal";
+        case "http://www.w3.org/ns/shacl#BlankNode":
+          return "BlankNode";
+        case "http://www.w3.org/ns/shacl#IRI":
+          return "NamedNode";
+      }
+    }
+    throw new Error(`Unsupported template target ${JSON.stringify(target)}`);
   }
 
   /**
@@ -119,13 +141,16 @@ class TemplateRenderer implements ITemplateRenderer {
   protected findTemplates(term: RDF.Term | undefined): ITemplate[] {
     const templatesWithRelevance: { template: ITemplate; relevance: number }[] = [];
     if (term) {
-      for (const template of this.templates.values()) {
-        const relevance = this.calculateRelevance(template, term);
-        if (relevance >= 0) {
-          templatesWithRelevance.push({ template, relevance });
+      const templates = this.templates.get(term.termType);
+      if (templates) {
+        for (const template of templates) {
+          const relevance = this.calculateRelevance(template, term);
+          if (relevance >= 0) {
+            templatesWithRelevance.push({ template, relevance });
+          }
         }
+        templatesWithRelevance.sort((a, b) => b.relevance - a.relevance);
       }
-      templatesWithRelevance.sort((a, b) => b.relevance - a.relevance);
     }
     return templatesWithRelevance.map((t) => t.template);
   }
@@ -155,8 +180,8 @@ class TemplateRenderer implements ITemplateRenderer {
   }
 
   protected async renderWithTemplate(term: RDF.Term, template: ITemplate): Promise<string> {
-    const termHash = this.hashObject({ term, template: template.etaName });
-    let renderResult = this.cache.get(termHash);
+    const cacheKey = this.hashObject({ term, template: template.etaName });
+    let renderResult = this.cache.get(cacheKey);
     if (renderResult === undefined) {
       const context: ITemplateContext = {
         term,
@@ -184,7 +209,7 @@ class TemplateRenderer implements ITemplateRenderer {
           .then((html) => resolve(html))
           .catch((ex: unknown) => resolve(`<pre class="error">${ex}</pre>`)),
       );
-      this.cache.set(termHash, renderResult);
+      this.cache.set(cacheKey, renderResult);
     }
     return renderResult;
   }
@@ -322,6 +347,9 @@ class TemplateRenderer implements ITemplateRenderer {
           resolutions: { [queryIdentifier.value]: [resolve] },
           rejections: { [queryIdentifier.value]: [reject] },
         };
+        // The timeout is set when the first entry is added into the buffer.
+        // This ensures only one timeout is created per-buffer, and the countdown
+        // begins when the buffer is created, without further updates to it.
         setTimeout(() => executor(batchIdentifier), this.batchWindowMilliseconds);
       }
     });
@@ -353,11 +381,10 @@ class TemplateRenderer implements ITemplateRenderer {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    let selectOperation: Algebra.Operation;
     try {
       const askOperation = this.parseOperation(batch.query);
 
-      selectOperation = algebraUtils.mapOperation(askOperation, {
+      const selectOperation = algebraUtils.mapOperation(askOperation, {
         ask: {
           preVisitor: () => ({ shortcut: true, copy: false }),
           transform: (_, op) =>
@@ -370,17 +397,7 @@ class TemplateRenderer implements ITemplateRenderer {
             ),
         },
       }) as Algebra.Operation;
-    } catch (error: unknown) {
-      // Send the error to all queries
-      for (const rejections of Object.values(batch.rejections)) {
-        for (const rejection of rejections) {
-          rejection(error);
-        }
-      }
-      return;
-    }
 
-    try {
       const queryString = this.serializeOperation(selectOperation);
       const bindingsArray = await this.selectAll(queryString, batch.endpoint);
 
@@ -417,11 +434,10 @@ class TemplateRenderer implements ITemplateRenderer {
     const batch = buffer[batchIdentifier.value];
     delete buffer[batchIdentifier.value];
 
-    let selectOperation: Algebra.Operation;
     try {
       const selectOperationOriginal = this.parseOperation(batch.query);
 
-      selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
+      const selectOperation = algebraUtils.mapOperation(selectOperationOriginal, {
         project: {
           preVisitor: () => ({ shortcut: true, copy: false }),
           transform: (_copy, op) =>
@@ -431,17 +447,7 @@ class TemplateRenderer implements ITemplateRenderer {
             ),
         },
       }) as Algebra.Operation;
-    } catch (error: unknown) {
-      // Send the error to all queries
-      for (const rejections of Object.values(batch.rejections)) {
-        for (const rejection of rejections) {
-          rejection(error);
-        }
-      }
-      return;
-    }
 
-    try {
       const queryString = this.serializeOperation(selectOperation);
       const bindingsArray = await this.selectAll(queryString, batch.endpoint);
       const bindingsByQuery: Record<string, IBindings[]> = {};
